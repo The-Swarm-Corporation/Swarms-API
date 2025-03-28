@@ -12,3 +12,4 @@ transformers
 pytz
 pydub
 litellm
+langchain-qdrant

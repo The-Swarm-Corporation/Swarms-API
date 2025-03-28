@@ -34,6 +34,16 @@ import socket
 import psutil
 
 
+# Imports for RAG functionality:
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.document_loaders import DirectoryLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.chains import ConversationalRetrievalChain
+from langchain.docstore.document import Document
+
 load_dotenv()
 
 # Define rate limit parameters
@@ -137,6 +147,22 @@ class AgentSpec(BaseModel):
     max_loops: Optional[int] = Field(
         default=1,
         description="The maximum number of times the agent is allowed to repeat its task, enabling iterative processing if necessary.",
+    )
+    rag_collection: Optional[str] = Field(
+        None,
+        description="The Qdrant collection name for RAG functionality. If provided, this agent will perform RAG queries.",
+    )
+    rag_documents: Optional[List[str]] = Field(
+        None,
+        description="Documents to ingest into the Qdrant collection for RAG. (List of text strings)",
+    )
+    rag_query: Optional[str] = Field(
+        None,
+        description="The question to ask the agent if RAG is enabled.",
+    )
+    chat_history: Optional[List[Any]] = Field(
+        default_factory=list,
+        description="Optional conversation history for RAG queries",
     )
     # tools_dictionary: Optional[List[Dict[str, Any]]] = Field(
     #     description="A dictionary of tools that the agent can use to complete its task."
@@ -249,6 +275,21 @@ class MarketplaceSwarmComplete(MarketplaceSwarmMetadata):
     """Complete marketplace swarm including the actual swarm spec"""
 
     swarm_spec: SwarmSpec = Field(..., description="The actual swarm specification")
+
+
+class RagCollectionCreate(BaseModel):
+    collection_name: str = Field(..., description="Name of the Qdrant collection to create")
+    vector_size: Optional[int] = Field(3072, description="Size of the vectors in the collection")
+    distance: Optional[str] = Field("COSINE", description="Distance metric for the vectors")
+
+class RagDocumentUpload(BaseModel):
+    collection_name: str = Field(..., description="Name of the Qdrant collection")
+    documents: List[str] = Field(..., description="List of document texts to index")
+
+def get_llm_instance(model_name: str, x_api_key: str):
+    # Instead of using a new ChatOpenAI instance, we use the already loaded model indicated by model_name.
+    # For demonstration, we instantiate ChatOpenAI passing the provided Swarms API key.
+    return ChatOpenAI(model_name=model_name, openai_api_key=x_api_key)
 
 
 class AutoGenerateAgentsSpec(BaseModel):
@@ -479,36 +520,19 @@ def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]
     return task, tasks
 
 
-def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
-    """
-    Creates a single agent.
-
-    Args:
-        agent_spec: Agent specification (either AgentSpec object or dict)
-
-    Returns:
-        Created Agent instance
-
-    Raises:
-        HTTPException: If agent creation fails
-    """
+def create_single_agent(agent_spec: Union[AgentSpec, dict], x_api_key: str = None):
     try:
-        # Convert dict to AgentSpec if needed
         if isinstance(agent_spec, dict):
             agent_spec = AgentSpec(**agent_spec)
 
-        # Validate required fields
         if not agent_spec.agent_name:
             raise ValueError("Agent name is required.")
         if not agent_spec.model_name:
             raise ValueError("Model name is required.")
 
-        # if agent_spec.tools_dictionary is not None:
-        #     tools_list_dictionary = agent_spec.tools_dictionary
-        # else:
-        #     tools_list_dictionary = None
-
-        # Create the agent
+        # Create the agent object.
+        # (Here we assume Agent is a class from the swarms package; we mimic its creation.)
+        from swarms import Agent  # Assuming the Agent class is imported from swarms
         agent = Agent(
             agent_name=agent_spec.agent_name,
             description=agent_spec.description,
@@ -520,27 +544,77 @@ def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
             role=agent_spec.role or "worker",
             max_loops=agent_spec.max_loops or 1,
             dynamic_temperature_enabled=True,
-            # tools_list_dictionary=tools_list_dictionary,
         )
-
         logger.info("Successfully created agent: {}", agent_spec.agent_name)
+
+        # --- RAG Integration ---
+        if agent_spec.rag_collection:
+            # Initialize embeddings using the Swarms API key (acting as a proxy for OpenAI)
+            rag_embeddings = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_key=x_api_key)
+            # Initialize Qdrant client using environment variables (make sure QDRANT_URL and QDRANT_API_KEY are set)
+            rag_client = QdrantClient(
+                url=os.getenv("QDRANT_URL"),
+                api_key=os.getenv("QDRANT_API_KEY")
+            )
+            # Check if the collection exists; if not, create it.
+            try:
+                rag_client.get_collection(agent_spec.rag_collection)
+            except Exception as e:
+                rag_client.create_collection(
+                    collection_name=agent_spec.rag_collection,
+                    vectors_config=VectorParams(size=3072, distance=Distance.COSINE),
+                )
+            # Create a QdrantVectorStore for this agent's RAG functionality.
+            rag_vector_store = QdrantVectorStore(
+                client=rag_client,
+                collection_name=agent_spec.rag_collection,
+                embedding=rag_embeddings,
+            )
+            # If rag_documents are provided, ingest them.
+            if agent_spec.rag_documents:
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                docs = [Document(page_content=doc, metadata={"source": f"rag_doc_{i}"})
+                        for i, doc in enumerate(agent_spec.rag_documents)]
+                splits = text_splitter.split_documents(docs)
+                batch_size = 10
+                for i in range(0, len(splits), batch_size):
+                    batch = splits[i:i+batch_size]
+                    rag_vector_store.add_documents(batch)
+                logger.info("Ingested {} document chunks into collection {}", len(splits), agent_spec.rag_collection)
+            # Build a retrieval chain using the model specified in the agent_spec.
+            llm_instance = get_llm_instance(agent_spec.model_name, x_api_key)
+            rag_chain = ConversationalRetrievalChain.from_llm(
+                llm=llm_instance,
+                retriever=rag_vector_store.as_retriever(search_kwargs={"k": 3}),
+                return_source_documents=True,
+            )
+            # Attach the retrieval chain to the agent.
+            agent.rag_chain = rag_chain
+            logger.info("Attached RAG chain to agent {}", agent_spec.agent_name)
+
+            # If there's a RAG query, execute it
+            if agent_spec.rag_query:
+                result = rag_chain.invoke({
+                    "question": agent_spec.rag_query,
+                    "chat_history": agent_spec.chat_history or []
+                })
+                answer = result.get("answer", "")
+                sources = result.get("source_documents", [])
+                return {
+                    "status": "success",
+                    "agent_name": agent_spec.agent_name,
+                    "answer": answer,
+                    "sources": [{"source": src.metadata.get("source", "Unknown"), "content": src.page_content} 
+                               for src in sources]
+                }
+
         return agent
 
     except ValueError as ve:
-        logger.error(
-            "Validation error for agent {}: {}",
-            getattr(agent_spec, "agent_name", "unknown"),
-            str(ve),
-        )
-        raise HTTPException(
-            status_code=400, detail=f"Agent validation error: {str(ve)}"
-        )
+        logger.error("Validation error for agent {}: {}", getattr(agent_spec, "agent_name", "unknown"), str(ve))
+        raise HTTPException(status_code=400, detail=f"Agent validation error: {str(ve)}")
     except Exception as e:
-        logger.error(
-            "Error creating agent {}: {}",
-            getattr(agent_spec, "agent_name", "unknown"),
-            str(e),
-        )
+        logger.error("Error creating agent {}: {}", getattr(agent_spec, "agent_name", "unknown"), str(e))
         raise HTTPException(status_code=500, detail=f"Failed to create agent: {str(e)}")
 
 
@@ -1133,18 +1207,74 @@ async def check_swarm_types() -> Dict[str, Any]:
     return out
 
 
-@app.post(
-    "/v1/swarm/completions",
-    dependencies=[
-        Depends(verify_api_key),
-        Depends(rate_limiter),
-    ],
-)
-async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
+@app.post("/v1/swarms/completions", dependencies=[Depends(verify_api_key), Depends(rate_limiter)])
+async def run_swarm_completions(swarm: SwarmSpec, x_api_key: str = Header(...)) -> Dict[str, Any]:
     """
-    Run a swarm with the specified task.
+    Main endpoint for swarm completions with integrated RAG functionality.
+    
+    For RAG operations:
+    - To create a collection: Include an agent with rag_collection and rag_documents
+    - To query a collection: Include an agent with rag_collection and rag_query
     """
     return await run_swarm_completion(swarm, x_api_key)
+
+@app.post("/v1/swarms/rag/create_collection", dependencies=[Depends(verify_api_key), Depends(rate_limiter)])
+async def create_rag_collection(request: RagCollectionCreate, x_api_key: str = Header(...)):
+    """
+    Create a new Qdrant collection for RAG.
+    """
+    try:
+        rag_client = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
+        distance_mapping = {
+            "COSINE": Distance.COSINE,
+            "EUCLID": Distance.EUCLID,
+            "DOT": Distance.DOT
+        }
+        distance = distance_mapping.get(request.distance.upper(), Distance.COSINE)
+        
+        rag_client.create_collection(
+            collection_name=request.collection_name,
+            vectors_config=VectorParams(size=request.vector_size, distance=distance),
+        )
+        return {"status": "success", "message": f"Collection '{request.collection_name}' created successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create collection: {str(e)}")
+
+@app.post("/v1/swarms/rag/upload_documents", dependencies=[Depends(verify_api_key), Depends(rate_limiter)])
+async def upload_rag_documents(request: RagDocumentUpload, x_api_key: str = Header(...)):
+    """
+    Upload documents to an existing Qdrant collection.
+    """
+    try:
+        embeddings_inst = OpenAIEmbeddings(model="text-embedding-3-large", openai_api_key=x_api_key)
+        rag_client = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY")
+        )
+        try:
+            rag_client.get_collection(request.collection_name)
+        except Exception:
+            raise HTTPException(status_code=404, detail=f"Collection '{request.collection_name}' does not exist")
+        
+        vector_store = QdrantVectorStore(
+            client=rag_client,
+            collection_name=request.collection_name,
+            embedding=embeddings_inst,
+        )
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        docs = [Document(page_content=doc, metadata={"source": f"ingested_{i}"})
+                for i, doc in enumerate(request.documents)]
+        splits = text_splitter.split_documents(docs)
+        batch_size = 10
+        for i in range(0, len(splits), batch_size):
+            batch = splits[i:i+batch_size]
+            vector_store.add_documents(batch)
+        return {"status": "success", "message": f"Indexed {len(splits)} chunks into collection '{request.collection_name}'"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
 
 
 @app.post(
