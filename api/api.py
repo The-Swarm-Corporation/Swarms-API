@@ -44,11 +44,14 @@ from swarms.structs import AgentsBuilder
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
 
+# Additional imports for RAG functionality
+import requests
+from litellm import embedding
+
+load_dotenv()
 
 # --- Async generator to stream a dictionary as NDJSON ---
-async def async_stream_dict(
-    data: Dict[str, Any], delay: float = 0.0
-) -> AsyncGenerator[str, None]:
+async def async_stream_dict(data: Dict[str, Any], delay: float = 0.0) -> AsyncGenerator[str, None]:
     for key, value in data.items():
         if delay:
             await asyncio.sleep(delay)  # Optional delay per key
@@ -57,7 +60,10 @@ async def async_stream_dict(
 
 # --- Function to streamify any async function that returns a dict ---
 def async_streamify_dict(
-    fn: Callable[..., Awaitable[Dict[str, Any]]], *args, delay: float = 0.0, **kwargs
+    fn: Callable[..., Awaitable[Dict[str, Any]]],
+    *args,
+    delay: float = 0.0,
+    **kwargs
 ) -> StreamingResponse:
     """
     Call an async function that returns a dict and stream it as NDJSON.
@@ -79,9 +85,7 @@ def async_streamify_dict(
     return StreamingResponse(generator(), media_type="application/x-ndjson")
 
 
-load_dotenv()
-
-# Define rate limit parameters
+# Load configuration
 RATE_LIMIT = 100  # Max requests
 TIME_WINDOW = 60  # Time window in seconds
 
@@ -182,6 +186,15 @@ class AgentSpec(BaseModel):
     max_loops: Optional[int] = Field(
         default=1,
         description="The maximum number of times the agent is allowed to repeat its task, enabling iterative processing if necessary.",
+    )
+    # New fields for RAG functionality
+    rag_collection: Optional[str] = Field(
+        None,
+        description="The Qdrant collection name for RAG functionality. If provided, this agent will perform RAG queries.",
+    )
+    rag_documents: Optional[List[str]] = Field(
+        None,
+        description="Documents to ingest into the Qdrant collection for RAG. (List of text strings)",
     )
     # tools_dictionary: Optional[List[Dict[str, Any]]] = Field(
     #     description="A dictionary of tools that the agent can use to complete its task."
@@ -697,7 +710,134 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
         )
 
 
-# Add this function after your get_supabase_client() function
+# --- RAG Pipeline Implementation ---
+# This code implements unified indexing and retrieval operations with Qdrant using LiteLLM embeddings.
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+
+def rag_pipeline(operation: str, collection_name: str, data: Optional[List[str]] = None, query: Optional[str] = None, vector_dim: int = 1536, embedding_model: str = "text-embedding-3-small"
+) -> Union[bool, tuple, None]:
+    """Unified RAG pipeline for indexing and retrieval operations."""
+    # Fixed constants
+    C = {"metric": "Cosine", "chunk_size": 500, "overlap": 50, "batch": 50, "limit": 3, "threshold": 0.35}
+    
+    # Helper function for API requests
+    def _req(method, path, json=None, params=None):
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            return None
+        try:
+            resp = requests.request(
+                method, 
+                f"{QDRANT_URL}{path}", 
+                headers={"api-key": QDRANT_API_KEY, "Content-Type": "application/json"},
+                json=json,
+                params=params,
+                timeout=60
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            print(f"Qdrant API Error: {str(e)}")
+            return None
+    
+    # LiteLLM embedding function
+    def _embed(texts):
+        try:
+            response = embedding(model=embedding_model, input=texts)
+            return [item['embedding'] for item in response.data]
+        except Exception as e:
+            print(f"Embedding Error: {str(e)}")
+            return None
+    
+    # INDEXING OPERATION
+    if operation == "index" and data:
+        # Ensure collection exists
+        exists = _req("GET", f"/collections/{collection_name}/exists")
+        if not exists or exists.get("status") != "ok":
+            return False
+            
+        if not exists.get("result", {}).get("exists", False):
+            if not _req("PUT", f"/collections/{collection_name}", 
+                      json={"vectors": {"size": vector_dim, "distance": C["metric"]}}):
+                return False
+        
+        # Process documents into chunks
+        chunks = []
+        for doc_idx, content in enumerate([d for d in data if isinstance(d, str) and d.strip()]):
+            start, chunk_idx = 0, 0
+            while start < len(content):
+                end = min(start + C["chunk_size"], len(content))
+                chunk_text = content[start:end].strip()
+                if chunk_text:
+                    chunks.append({
+                        "id": str(uuid4()),
+                        "text": chunk_text,
+                        "meta": {"doc_idx": doc_idx, "chunk_idx": chunk_idx}
+                    })
+                    chunk_idx += 1
+                start = end - C["overlap"] if end - C["overlap"] > start else start + 1
+        
+        if not chunks:
+            return True
+            
+        # Embed and upsert in batches
+        success = True
+        for i in range(0, len(chunks), C["batch"]):
+            batch = chunks[i:i + C["batch"]]
+            batch_texts = [item['text'] for item in batch]
+            embeddings = _embed(batch_texts)
+            
+            if not embeddings or len(embeddings) != len(batch):
+                success = False
+                continue
+                
+            points = [{
+                "id": item["id"],
+                "vector": emb,
+                "payload": {"content": item["text"], "metadata": item["meta"]}
+            } for item, emb in zip(batch, embeddings)]
+            
+            resp = _req("PUT", f"/collections/{collection_name}/points", 
+                      json={"points": points}, params={"wait": "true"})
+            if not resp or resp.get("result", {}).get("status") != "completed":
+                success = False
+                
+        return success
+        
+    # RETRIEVAL OPERATION
+    elif operation == "retrieve" and query:
+        query_emb = _embed([query])[0]
+        resp = _req("POST", f"/collections/{collection_name}/points/query", json={
+            "query": query_emb,
+            "limit": C["limit"],
+            "with_payload": True,
+            "with_vector": False,
+            "score_threshold": C["threshold"]
+        })
+        
+        if not resp or resp.get("status") != "ok":
+            return None, None
+            
+        results = resp.get("result", {}).get("points", [])
+        if not results:
+            return "No relevant context found.", []
+            
+        context = []
+        sources = []
+        for i, doc in enumerate(results):
+            text = doc.get("payload", {}).get("content", "[Missing]")
+            meta = doc.get("payload", {}).get("metadata", {})
+            score = doc.get("score", 0.0)
+            
+            context.append(f"Context {i+1} (Score: {score:.4f}):\n{text}")
+            meta['score'] = score
+            sources.append(meta)
+            
+        return "\n\n---\n\n".join(context), sources
+        
+    return None
+
+
 async def log_api_request(api_key: str, data: Dict[str, Any]) -> None:
     """
     Log API request data to Supabase swarms_api_logs table.
@@ -734,6 +874,20 @@ async def run_swarm_completion(
     try:
         swarm_name = swarm.name
 
+        # --- RAG Integration ---
+        # For each agent with rag_collection set, index the documents (if any)
+        # and then retrieve context based on the swarm task.
+        if swarm.agents:
+            for agent_spec in swarm.agents:
+                if agent_spec.rag_collection:
+                    if agent_spec.rag_documents and len(agent_spec.rag_documents) > 0:
+                        indexing_success = rag_pipeline("index", agent_spec.rag_collection, data=agent_spec.rag_documents)
+                        if not indexing_success:
+                            logger.error(f"Failed to index documents for collection {agent_spec.rag_collection}")
+                    rag_context, rag_sources = rag_pipeline("retrieve", agent_spec.rag_collection, query=swarm.task)
+                    if rag_context:
+                        agent_spec.system_prompt = (agent_spec.system_prompt or "") + "\n\nRAG Context:\n" + rag_context
+
         agents = swarm.agents
 
         await log_api_request(x_api_key, swarm.model_dump())
@@ -768,7 +922,7 @@ async def run_swarm_completion(
             "swarm_name": swarm_name,
             "description": swarm.description,
             "swarm_type": swarm.swarm_type,
-            # "task": swarm.task,
+            "task": swarm.task,
             "output": result,
             "number_of_agents": length_of_agents,
             # "input_config": swarm.model_dump(),
