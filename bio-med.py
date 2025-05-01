@@ -11,7 +11,7 @@ def run_biomed_swarm(research_query):
     A specialized swarm that combines literature review, experimental design,
     and practical implementation advice for biochemical research.
     """
-    url = "https://api.swarms.world/v1/swarm/completions"
+    url = "https://swarms-api-285321057562.us-east1.run.app/v1/swarm/completions"
 
     headers = {"x-api-key": SWARMS_API_KEY, "Content-Type": "application/json"}
 

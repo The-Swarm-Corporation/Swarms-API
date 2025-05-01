@@ -37,7 +37,6 @@ from pydantic import BaseModel, Field
 from swarms import Agent, SwarmRouter, SwarmType
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
-from swarms.agents.reasoning_agents import ReasoningAgentRouter
 from typing import Literal
 
 # Literal of output types
@@ -1255,34 +1254,34 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
         )
 
 
-@app.post(
-    "/v1/agents/completions",
-    dependencies=[
-        Depends(verify_api_key),
-        Depends(rate_limiter),
-    ],
-)
-async def run_agent(agent: ReasoningAgentSpec, x_api_key=Header(...)) -> Dict[str, Any]:
-    """
-    Run an agent with the specified task.
-    """
-    # Get the dict
-    reasoning_agent = ReasoningAgentRouter(**agent.model_dump())
+# @app.post(
+#     "/v1/agents/completions",
+#     dependencies=[
+#         Depends(verify_api_key),
+#         Depends(rate_limiter),
+#     ],
+# )
+# async def run_agent(agent: ReasoningAgentSpec, x_api_key=Header(...)) -> Dict[str, Any]:
+#     """
+#     Run an agent with the specified task.
+#     """
+#     # Get the dict
+#     reasoning_agent = ReasoningAgentRouter(**agent.model_dump())
 
-    # Run the agent
-    result = reasoning_agent.run(agent.task)
+#     # Run the agent
+#     result = reasoning_agent.run(agent.task)
 
-    # Generate a unique id
-    unique_id = generate_key("reasoning-agent")
+#     # Generate a unique id
+#     unique_id = generate_key("reasoning-agent")
 
-    output = {
-        "id": unique_id,
-        "success": True,
-        "outputs": result,
-        "timestamp": datetime.now(UTC).isoformat(),
-    }
+#     output = {
+#         "id": unique_id,
+#         "success": True,
+#         "outputs": result,
+#         "timestamp": datetime.now(UTC).isoformat(),
+#     }
 
-    return output
+#     return output
 
 
 @app.post(
