@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 from swarms import Agent, SwarmRouter, SwarmType
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
-from swarms.agents.reasoning_agents import ReasoningAgentRouter, agent_types
+from swarms.agents.reasoning_agents import ReasoningAgentRouter
 from typing import Literal
 
 # Literal of output types
@@ -54,6 +54,19 @@ OutputType = Literal[
     "string",
     "str",
 ]
+
+agent_types = Literal[
+    "reasoning-duo",
+    "self-consistency",
+    "ire",
+    "reasoning-agent",
+    "consistency-agent",
+    "ire-agent",
+    "ReflexionAgent",
+    "GKPAgent",
+    "AgentJudge",
+]
+
 
 # Use the OutputType for type annotations
 output_type: OutputType
@@ -273,7 +286,7 @@ class ReasoningAgentSpec(BaseModel):
         default=1,
         description="The number of samples to generate."
     )
-    output_type: Optional[output_type] = Field( # type: ignore
+    output_type: Optional[str] = Field( # type: ignore
         default="dict",
         description="The type of output to generate."
     )
