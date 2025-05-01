@@ -19,6 +19,9 @@ RUN apt-get update && \
     apt-get purge -y --auto-remove gcc build-essential && \
     rm -rf /var/lib/apt/lists/*
 
+# Update swarms
+RUN pip install --upgrade swarms
+
 # Copy the API source code into the container
 COPY api/ .
 
