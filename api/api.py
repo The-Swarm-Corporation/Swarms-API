@@ -259,50 +259,39 @@ class SwarmSpec(BaseModel):
 
 class ReasoningAgentSpec(BaseModel):
     agent_name: Optional[str] = Field(
-        None,
-        description="The name of the reasoning agent."
+        None, description="The name of the reasoning agent."
     )
     description: Optional[str] = Field(
-        None,
-        description="A description of the reasoning agent's capabilities."
+        None, description="A description of the reasoning agent's capabilities."
     )
     model_name: Optional[str] = Field(
         default="gpt-4o-mini",
-        description="The name of the model to use for the reasoning agent."
+        description="The name of the model to use for the reasoning agent.",
     )
     system_prompt: Optional[str] = Field(
-        None,
-        description="The system prompt to use for the reasoning agent."
+        None, description="The system prompt to use for the reasoning agent."
     )
     max_loops: Optional[int] = Field(
         default=1,
-        description="The maximum number of execution loops allowed for the reasoning agent."
+        description="The maximum number of execution loops allowed for the reasoning agent.",
     )
     swarm_type: Optional[agent_types] = Field(
-        default="AgentJudge",
-        description="The type of swarm architecture to use."
+        default="AgentJudge", description="The type of swarm architecture to use."
     )
     num_samples: Optional[int] = Field(
-        default=1,
-        description="The number of samples to generate."
+        default=1, description="The number of samples to generate."
     )
-    output_type: Optional[str] = Field( # type: ignore
-        default="dict",
-        description="The type of output to generate."
+    output_type: Optional[str] = Field(  # type: ignore
+        default="dict", description="The type of output to generate."
     )
     num_knowledge_items: Optional[int] = Field(
-        default=1,
-        description="The number of knowledge items to use."
+        default=1, description="The number of knowledge items to use."
     )
     memory_capacity: Optional[int] = Field(
-        default=1,
-        description="The memory capacity of the reasoning agent."
+        default=1, description="The memory capacity of the reasoning agent."
     )
-    task: Optional[str] = Field(
-        None,
-        description="The task to complete."
-    )
-    
+    task: Optional[str] = Field(None, description="The task to complete.")
+
     class Config:
         arbitrary_types_allowed = True
 
@@ -1266,7 +1255,6 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
         )
 
 
-
 @app.post(
     "/v1/agents/completions",
     dependencies=[
@@ -1280,24 +1268,23 @@ async def run_agent(agent: ReasoningAgentSpec, x_api_key=Header(...)) -> Dict[st
     """
     # Get the dict
     reasoning_agent = ReasoningAgentRouter(**agent.model_dump())
-    
+
     # Run the agent
     result = reasoning_agent.run(agent.task)
-    
+
     # Generate a unique id
-    unique_id = generate_key('reasoning-agent')
-    
+    unique_id = generate_key("reasoning-agent")
+
     output = {
         "id": unique_id,
         "success": True,
         "outputs": result,
         "timestamp": datetime.now(UTC).isoformat(),
     }
-    
+
     return output
-    
-    
-    
+
+
 @app.post(
     "/v1/swarm/batch/completions",
     dependencies=[
