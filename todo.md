@@ -53,3 +53,15 @@
 |                              | Implement cross-modal reasoning between different data types                               | [ ]    |
 |                              | Add support for generating images from text descriptions                                    | [ ]    |
 |                              | Develop capabilities for video summarization and analysis                                  | [ ]    |
+
+
+
+
+
+# Todo
+
+- Add MCP connection
+- Add RAG collection through API side
+- Add auto-generate agents feature, which we should've added
+- Add auto-prompt generation API 
+- Add various other functionality like AgentRearrange
