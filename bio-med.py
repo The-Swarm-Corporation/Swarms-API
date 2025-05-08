@@ -111,7 +111,7 @@ def run_biomed_swarm(research_query):
     }
 
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:

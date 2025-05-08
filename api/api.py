@@ -174,6 +174,16 @@ class AgentSpec(BaseModel):
         arbitrary_types_allowed = True
 
 
+class AgentCompletion(BaseModel):
+    agent_config: AgentSpec = Field(
+        ..., description="The configuration of the agent to be completed."
+    )
+    task: str = Field(..., description="The task to be completed by the agent.")
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class Agents(BaseModel):
     """Configuration for a collection of agents that work together as a swarm to accomplish tasks."""
 
@@ -1254,34 +1264,76 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
         )
 
 
-# @app.post(
-#     "/v1/agents/completions",
-#     dependencies=[
-#         Depends(verify_api_key),
-#         Depends(rate_limiter),
-#     ],
-# )
-# async def run_agent(agent: ReasoningAgentSpec, x_api_key=Header(...)) -> Dict[str, Any]:
-#     """
-#     Run an agent with the specified task.
-#     """
-#     # Get the dict
-#     reasoning_agent = ReasoningAgentRouter(**agent.model_dump())
+@app.post(
+    "/v1/agent/completions",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(rate_limiter),
+    ],
+)
+async def run_agent(
+    agent_completion: AgentCompletion, x_api_key=Header(...)
+) -> Dict[str, Any]:
+    """
+    Run an agent with the specified task.
+    """
+    try:
+        # Validate agent configuration
+        if not agent_completion.agent_config.agent_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
+            )
 
-#     # Run the agent
-#     result = reasoning_agent.run(agent.task)
+        try:
+            # Create agent from the config
+            agent = Agent(**agent_completion.agent_config.model_dump())
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid agent configuration: {str(ve)}",
+            )
 
-#     # Generate a unique id
-#     unique_id = generate_key("reasoning-agent")
+        try:
+            # Run the agent with the provided task
+            result = agent.run(task=agent_completion.task)
+        except Exception as run_error:
+            logger.error(f"Agent execution failed: {str(run_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Agent execution failed: {str(run_error)}",
+            )
 
-#     output = {
-#         "id": unique_id,
-#         "success": True,
-#         "outputs": result,
-#         "timestamp": datetime.now(UTC).isoformat(),
-#     }
+        # Generate a unique id
+        try:
+            unique_id = generate_key("agent")
+        except Exception as key_error:
+            logger.error(f"Failed to generate unique ID: {str(key_error)}")
+            unique_id = str(uuid4())  # Fallback to UUID if key generation fails
 
-#     return output
+        output = {
+            "id": unique_id,
+            "success": True,
+            "outputs": result,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        try:
+            log_api_request(api_key=x_api_key, data=output)
+        except Exception as log_error:
+            logger.error(f"Failed to log API request: {str(log_error)}")
+            # Continue execution even if logging fails
+
+        return output
+    except HTTPException:
+        # Re-raise HTTP exceptions as they're already properly formatted
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error running agent: {str(e)}")
+        logger.exception(e)  # Log full traceback
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}",
+        )
 
 
 @app.post(
