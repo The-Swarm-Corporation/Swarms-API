@@ -236,37 +236,168 @@ class SwarmAPITest:
             self._log_test(endpoint, "failed", None, str(e))
             return False
 
-    # def test_auto_generate_agents(self):
-    #     """Test auto-generating agents for a task."""
-    #     endpoint = "/v1/agents/auto-generate"
+    def test_agent_completion(self):
+        """Test running a single agent completion."""
+        endpoint = "/v1/agent/completions"
 
-    #     try:
-    #         logger.info(f"Testing {endpoint} endpoint")
+        try:
+            logger.info(f"Testing {endpoint} endpoint")
 
-    #         payload = {"task": "Create a data analysis plan for customer retention"}
+            # Basic agent completion payload
+            payload = {
+                "agent_config": {
+                    "agent_name": "Research Analyst",
+                    "description": "An expert in analyzing and synthesizing research data",
+                    "system_prompt": (
+                        "You are a Research Analyst with expertise in data analysis and synthesis. "
+                        "Your role is to analyze provided information, identify key insights, "
+                        "and present findings in a clear, structured format."
+                    ),
+                    "model_name": "gpt-4o-mini",
+                    "role": "worker",
+                    "max_loops": 2,
+                    "max_tokens": 8192,
+                    "temperature": 0.5,
+                    "auto_generate_prompt": False,
+                },
+                "task": "Analyze the impact of artificial intelligence on healthcare delivery.",
+            }
 
-    #         response = requests.post(
-    #             f"{self.base_url}{endpoint}", headers=self.headers, json=payload
-    #         )
+            response = requests.post(
+                f"{self.base_url}{endpoint}", headers=self.headers, json=payload
+            )
 
-    #         if response.status_code == 200:
-    #             self._log_test(
-    #                 endpoint,
-    #                 "passed",
-    #                 {"message": "Successfully auto-generated agents"},
-    #             )
-    #             return True
-    #         else:
-    #             self._log_test(
-    #                 endpoint,
-    #                 "failed",
-    #                 response.json() if response.text else None,
-    #                 f"Unexpected status code: {response.status_code}",
-    #             )
-    #             return False
-    #     except Exception as e:
-    #         self._log_test(endpoint, "failed", None, str(e))
-    #         return False
+            if response.status_code == 200:
+                logger.debug(f"Agent completion response: {response.json()}")
+                self._log_test(endpoint, "passed", response.json())
+                return True
+            else:
+                self._log_test(
+                    endpoint,
+                    "failed",
+                    response.json() if response.text else None,
+                    f"Unexpected status code: {response.status_code}",
+                )
+                return False
+        except Exception as e:
+            logger.error(f"Exception in test_agent_completion: {str(e)}")
+            logger.debug(traceback.format_exc())
+            self._log_test(endpoint, "failed", None, str(e))
+            return False
+
+    def test_flex_processing(self):
+        """Test running a swarm with flex processing tier."""
+        endpoint = "/v1/swarm/completions"
+
+        try:
+            logger.info(f"Testing {endpoint} endpoint with flex processing")
+
+            # Swarm payload with flex processing
+            payload = {
+                "name": f"flex-test-swarm-{int(time.time())}",
+                "description": "Test swarm with flex processing",
+                "swarm_type": "SequentialWorkflow",
+                "task": "Write a short poem about AI",
+                "service_tier": "flex",  # Specify flex processing
+                "agents": [
+                    {
+                        "agent_name": "poet",
+                        "description": "A creative poet agent",
+                        "model_name": "gpt-4o-mini",
+                        "system_prompt": "You are a talented poet who specializes in short, evocative poems.",
+                        "temperature": 0.7,
+                        "max_loops": 1,
+                        "role": "worker",
+                    }
+                ],
+                "max_loops": 1,
+                "return_history": True,
+            }
+
+            response = requests.post(
+                f"{self.base_url}{endpoint}", headers=self.headers, json=payload
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                # Verify flex processing was applied
+                if response_data.get("service_tier") == "flex":
+                    self._log_test(endpoint, "passed", response_data)
+                    return True
+                else:
+                    self._log_test(
+                        endpoint,
+                        "failed",
+                        response_data,
+                        "Flex processing tier not applied correctly",
+                    )
+                    return False
+            else:
+                self._log_test(
+                    endpoint,
+                    "failed",
+                    response.json() if response.text else None,
+                    f"Unexpected status code: {response.status_code}",
+                )
+                return False
+        except Exception as e:
+            logger.error(f"Exception in test_flex_processing: {str(e)}")
+            logger.debug(traceback.format_exc())
+            self._log_test(endpoint, "failed", None, str(e))
+            return False
+
+    def test_agent_completion_with_tools(self):
+        """Test running an agent completion with tools."""
+        endpoint = "/v1/agent/completions"
+
+        try:
+            logger.info(f"Testing {endpoint} endpoint with tools")
+
+            # Agent completion payload with tools
+            payload = {
+                "agent_config": {
+                    "agent_name": "Code Assistant",
+                    "description": "An agent that helps with coding tasks",
+                    "system_prompt": "You are a helpful coding assistant.",
+                    "model_name": "gpt-4o-mini",
+                    "role": "worker",
+                    "max_loops": 1,
+                    "temperature": 0.5,
+                    "tools_dictionary": [
+                        {
+                            "name": "search",
+                            "description": "Search for information on the web",
+                            "parameters": {
+                                "query": "string",
+                                "num_results": "integer"
+                            }
+                        }
+                    ]
+                },
+                "task": "Search for information about Python async programming.",
+            }
+
+            response = requests.post(
+                f"{self.base_url}{endpoint}", headers=self.headers, json=payload
+            )
+
+            if response.status_code == 200:
+                logger.debug(f"Agent completion with tools response: {response.json()}")
+                self._log_test(endpoint, "passed", response.json())
+                return True
+            else:
+                self._log_test(
+                    endpoint,
+                    "failed",
+                    response.json() if response.text else None,
+                    f"Unexpected status code: {response.status_code}",
+                )
+                return False
+        except Exception as e:
+            logger.error(f"Exception in test_agent_completion_with_tools: {str(e)}")
+            logger.debug(traceback.format_exc())
+            self._log_test(endpoint, "failed", None, str(e))
+            return False
 
     def test_batch_completions(self):
         """Test running multiple swarms in batch mode."""
@@ -337,69 +468,6 @@ class SwarmAPITest:
         except Exception as e:
             self._log_test(endpoint, "failed", None, str(e))
             return False
-
-    # def test_schedule_swarm(self):
-    #     """Test scheduling a swarm to run at a future time."""
-    #     endpoint = "/v1/swarm/schedule"
-
-    #     try:
-    #         logger.info(f"Testing {endpoint} endpoint")
-
-    #         # Schedule a swarm 10 minutes in the future
-    #         future_time = datetime.utcnow() + timedelta(minutes=10)
-
-    #         payload = {
-    #             "name": f"scheduled-swarm-{int(time.time())}",
-    #             "description": "Test scheduled swarm",
-    #             "swarm_type": "SequentialWorkflow",
-    #             "task": "List 5 trends in AI for the next year",
-    #             "agents": [
-    #                 {
-    #                     "agent_name": "forecaster",
-    #                     "description": "An agent that forecasts AI trends",
-    #                     "model_name": "gpt-4o-mini",
-    #                     "system_prompt": "You are an AI trend forecaster with expertise in technology trends.",
-    #                     "temperature": 0.6,
-    #                     "max_loops": 1,
-    #                     "role": "worker",
-    #                 }
-    #             ],
-    #             "max_loops": 1,
-    #             "schedule": {
-    #                 "scheduled_time": future_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-    #                 "timezone": "UTC",
-    #             },
-    #         }
-
-    #         response = requests.post(
-    #             f"{self.base_url}{endpoint}", headers=self.headers, json=payload
-    #         )
-
-    #         if response.status_code == 200:
-    #             # Store the job_id for cleanup later
-    #             job_id = response.json().get("job_id")
-    #             logger.info(f"Created scheduled job with ID: {job_id}")
-    #             self._log_test(endpoint, "passed", response.json())
-
-    #             # Also test getting scheduled jobs
-    #             self.test_get_scheduled_jobs()
-
-    #             # Clean up by cancelling the job
-    #             if job_id:
-    #                 self.test_cancel_scheduled_job(job_id)
-
-    #             return True
-    #         else:
-    #             self._log_test(
-    #                 endpoint,
-    #                 "failed",
-    #                 response.json() if response.text else None,
-    #                 f"Unexpected status code: {response.status_code}",
-    #             )
-    #             return False
-    #     except Exception as e:
-    #         self._log_test(endpoint, "failed", None, str(e))
-    #         return False
 
     def test_get_scheduled_jobs(self):
         """Test retrieving all scheduled jobs."""
@@ -501,11 +569,9 @@ class SwarmAPITest:
 
         # Core functionality endpoints
         self.test_swarm_completion()
-        # self.test_auto_generate_agents()
+        self.test_agent_completion()
+        self.test_flex_processing()
         self.test_batch_completions()
-
-        # Scheduling endpoints
-        # self.test_schedule_swarm()
 
         # Logs endpoint
         self.test_swarm_logs()

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import platform
 import secrets
@@ -13,6 +14,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Union,
 )
@@ -37,8 +39,6 @@ from pydantic import BaseModel, Field
 from swarms import Agent, SwarmRouter, SwarmType
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
-from typing import Literal
-import asyncio
 
 # Literal of output types
 OutputType = Literal[
@@ -1475,10 +1475,10 @@ async def run_agent(
         output = {
             "id": unique_id,
             "success": True,
-            "outputs": result,
             "name": agent.name,
             "description": agent.description,
             "temperature": agent.temperature,
+            "outputs": result,
             "usage": usage_data,
             "timestamp": datetime.now(UTC).isoformat(),
         }
