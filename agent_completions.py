@@ -4,6 +4,7 @@ import os
 import requests
 from dotenv import load_dotenv
 import json
+from swarms.utils.formatter import formatter
 
 load_dotenv()
 
@@ -35,7 +36,7 @@ def run_single_agent():
             ),
             "model_name": "gpt-4o",
             "role": "worker",
-            "max_loops": 1,
+            "max_loops": 2,
             "max_tokens": 8192,
             "temperature": 0.5,
             "auto_generate_prompt": False,
@@ -58,14 +59,14 @@ if __name__ == "__main__":
     # Check API health
     health = run_health_check()
     print("API Health Check:")
-    print(json.dumps(health, indent=4))
+    formatter.print_panel(json.dumps(health, indent=4))
     print("\n" + "=" * 50 + "\n")
 
     # Run single agent
     print("Running Single Agent:")
     agent_result = run_single_agent()
     if agent_result:
-        print(json.dumps(agent_result, indent=4))
+        formatter.print_panel(json.dumps(agent_result, indent=4))
     print("\n" + "=" * 50 + "\n")
 
     # logs = get_logs()

@@ -38,6 +38,7 @@ from swarms import Agent, SwarmRouter, SwarmType
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
 from typing import Literal
+import asyncio
 
 # Literal of output types
 OutputType = Literal[
@@ -260,6 +261,10 @@ class SwarmSpec(BaseModel):
     stream: Optional[bool] = Field(
         False,
         description="A flag indicating whether the swarm should stream its output.",
+    )
+    service_tier: Optional[str] = Field(
+        "standard",
+        description="The service tier to use for processing. Options: 'standard' (default) or 'flex' for lower cost but slower processing.",
     )
 
     class Config:
@@ -654,6 +659,7 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
             input_text=swarm_spec.task,
             execution_time=execution_time,
             agent_outputs=output,
+            service_tier=swarm_spec.service_tier,
         )
 
         # Deduct credits
@@ -710,6 +716,7 @@ CACHE_TTL = 3600  # 1 hour in seconds
 MAX_CACHE_SIZE = 1000  # Maximum number of cache entries
 CACHE_CLEANUP_INTERVAL = 300  # Clean up cache every 5 minutes
 
+
 def generate_cache_key(swarm: SwarmSpec) -> str:
     """
     Generate a unique cache key for a swarm configuration.
@@ -722,7 +729,7 @@ def generate_cache_key(swarm: SwarmSpec) -> str:
         str(swarm.max_loops),
         str(swarm.return_history),
     ]
-    
+
     # Add agent configurations to the key
     if swarm.agents:
         agent_configs = []
@@ -736,38 +743,38 @@ def generate_cache_key(swarm: SwarmSpec) -> str:
             }
             agent_configs.append(str(agent_config))
         key_parts.extend(agent_configs)
-    
+
     # Add tasks and messages if present
     if swarm.tasks:
         key_parts.append(str(swarm.tasks))
     if swarm.messages:
         key_parts.append(str(swarm.messages))
-    
+
     return "|".join(key_parts)
+
 
 def cleanup_cache():
     """
     Clean up expired cache entries and enforce size limits.
     """
     current_time = time()
-    
+
     # Remove expired entries
     expired_keys = [
-        key for key, value in context_cache.items()
+        key
+        for key, value in context_cache.items()
         if current_time - value["timestamp"] >= CACHE_TTL
     ]
     for key in expired_keys:
         del context_cache[key]
-    
+
     # If still over size limit, remove oldest entries
     if len(context_cache) > MAX_CACHE_SIZE:
-        sorted_entries = sorted(
-            context_cache.items(),
-            key=lambda x: x[1]["timestamp"]
-        )
-        entries_to_remove = sorted_entries[:len(context_cache) - MAX_CACHE_SIZE]
+        sorted_entries = sorted(context_cache.items(), key=lambda x: x[1]["timestamp"])
+        entries_to_remove = sorted_entries[: len(context_cache) - MAX_CACHE_SIZE]
         for key, _ in entries_to_remove:
             del context_cache[key]
+
 
 async def run_swarm_completion(
     swarm: SwarmSpec, x_api_key: str = None
@@ -781,7 +788,7 @@ async def run_swarm_completion(
 
         # Generate cache key based on swarm configuration
         cache_key = generate_cache_key(swarm)
-        
+
         # Check if we have a valid cached result
         current_time = time()
         if cache_key in context_cache:
@@ -798,14 +805,34 @@ async def run_swarm_completion(
         # Create and run the swarm
         logger.debug(f"Creating swarm object for {swarm_name}")
 
-        try:
-            result = create_swarm(swarm, x_api_key)
-        except Exception as e:
-            logger.error(f"Error running swarm: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to run swarm: {e}",
-            )
+        # Handle flex processing
+        max_retries = 3 if swarm.service_tier == "flex" else 1
+        base_timeout = (
+            900.0 if swarm.service_tier == "flex" else 300.0
+        )  # 15 minutes for flex, 5 minutes for standard
+
+        for attempt in range(max_retries):
+            try:
+                result = create_swarm(swarm, x_api_key)
+                break
+            except HTTPException as e:
+                if e.status_code == 429 and swarm.service_tier == "flex":
+                    # Resource unavailable error in flex mode
+                    if attempt < max_retries - 1:
+                        # Exponential backoff
+                        backoff_time = (2**attempt) * 5  # 5, 10, 20 seconds
+                        logger.info(
+                            f"Resource unavailable, retrying in {backoff_time} seconds..."
+                        )
+                        await asyncio.sleep(backoff_time)
+                        continue
+                raise
+            except Exception as e:
+                logger.error(f"Error running swarm: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to run swarm: {e}",
+                )
 
         logger.debug(f"Running swarm task: {swarm.task}")
 
@@ -826,6 +853,7 @@ async def run_swarm_completion(
             "swarm_type": swarm.swarm_type,
             "output": result,
             "number_of_agents": length_of_agents,
+            "service_tier": swarm.service_tier,
         }
 
         if swarm.tasks is not None:
@@ -835,10 +863,7 @@ async def run_swarm_completion(
             response["messages"] = swarm.messages
 
         # Cache the response
-        context_cache[cache_key] = {
-            "response": response,
-            "timestamp": current_time
-        }
+        context_cache[cache_key] = {"response": response, "timestamp": current_time}
 
         # Clean up cache periodically
         if current_time % CACHE_CLEANUP_INTERVAL < 1:  # Check every ~5 minutes
@@ -950,6 +975,7 @@ def calculate_swarm_cost(
     input_text: str,
     execution_time: float,
     agent_outputs: Union[List[Dict[str, str]], str] = None,  # Update agent_outputs type
+    service_tier: str = "standard",
 ) -> Dict[str, Any]:
     """
     Calculate the cost of running a swarm based on agents, tokens, and execution time.
@@ -960,6 +986,7 @@ def calculate_swarm_cost(
         input_text: The input task/prompt text
         execution_time: Time taken to execute in seconds
         agent_outputs: List of output texts from each agent or a list of dictionaries
+        service_tier: The service tier being used ("standard" or "flex")
 
     Returns:
         Dict containing cost breakdown and total cost
@@ -968,6 +995,10 @@ def calculate_swarm_cost(
     COST_PER_AGENT = 0.01  # Base cost per agent
     COST_PER_1M_INPUT_TOKENS = 2.00  # Cost per 1M input tokens
     COST_PER_1M_OUTPUT_TOKENS = 4.50  # Cost per 1M output tokens
+
+    # Flex processing discounts
+    FLEX_INPUT_DISCOUNT = 0.25  # 75% discount for input tokens in flex mode
+    FLEX_OUTPUT_DISCOUNT = 0.25  # 75% discount for output tokens in flex mode
 
     # Get current time in California timezone
     california_tz = pytz.timezone("America/Los_Angeles")
@@ -1040,7 +1071,12 @@ def calculate_swarm_cost(
             (total_output_tokens / 1_000_000) * COST_PER_1M_OUTPUT_TOKENS * len(agents)
         )
 
-        # Apply discount during California night time hours
+        # Apply flex processing discounts if applicable
+        if service_tier == "flex":
+            input_token_cost *= FLEX_INPUT_DISCOUNT
+            output_token_cost *= FLEX_OUTPUT_DISCOUNT
+
+        # Apply night time discount
         if is_night_time:
             input_token_cost *= 0.25  # 75% discount
             output_token_cost *= 0.25  # 75% discount
@@ -1061,6 +1097,8 @@ def calculate_swarm_cost(
                 },
                 "num_agents": len(agents),
                 "execution_time_seconds": round(execution_time, 2),
+                "service_tier": service_tier,
+                "night_time_discount_applied": is_night_time,
             },
             "total_cost": round(total_cost, 6),
         }
@@ -1351,15 +1389,16 @@ agent_cache = {}
 CACHE_TTL = 300  # 5 minutes
 CACHE_CLEANUP_INTERVAL = 60  # 1 minute
 
+
 def cleanup_agent_cache():
     """Clean up expired cache entries"""
     current_time = time()
     expired_keys = [
-        k for k, v in agent_cache.items() 
-        if current_time - v["timestamp"] > CACHE_TTL
+        k for k, v in agent_cache.items() if current_time - v["timestamp"] > CACHE_TTL
     ]
     for k in expired_keys:
         del agent_cache[k]
+
 
 @app.post(
     "/v1/agent/completions",
@@ -1376,9 +1415,11 @@ async def run_agent(
     """
     try:
         current_time = time()
-        
+
         # Check cache first
-        cache_key = f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
+        cache_key = (
+            f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
+        )
         if cache_key in agent_cache:
             cached_data = agent_cache[cache_key]
             if current_time - cached_data["timestamp"] <= CACHE_TTL:
@@ -1393,7 +1434,10 @@ async def run_agent(
 
         try:
             # Create agent from the config
-            agent = Agent(**agent_completion.agent_config.model_dump(), output_type="dict-all-except-first",)
+            agent = Agent(
+                **agent_completion.agent_config.model_dump(),
+                output_type="dict-all-except-first",
+            )
         except ValueError as ve:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1417,18 +1461,30 @@ async def run_agent(
             logger.error(f"Failed to generate unique ID: {str(key_error)}")
             unique_id = str(uuid4())  # Fallback to UUID if key generation fails
 
+        # Calculate tokens once and reuse
+        input_text = agent_completion.task + agent.system_prompt + agent.name
+        input_tokens = count_tokens(input_text)
+        output_tokens = count_tokens(any_to_str(result))
+
+        usage_data = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+
         output = {
             "id": unique_id,
             "success": True,
             "outputs": result,
+            "name": agent.name,
+            "description": agent.description,
+            "temperature": agent.temperature,
+            "usage": usage_data,
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Cache the result
-        agent_cache[cache_key] = {
-            "response": output,
-            "timestamp": current_time
-        }
+        agent_cache[cache_key] = {"response": output, "timestamp": current_time}
 
         # Clean up cache periodically
         if current_time % CACHE_CLEANUP_INTERVAL < 1:
