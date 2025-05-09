@@ -704,6 +704,71 @@ async def log_api_request(api_key: str, data: Dict[str, Any]) -> None:
         logger.error(f"Error logging API request: {str(e)}")
 
 
+# Add cache dictionary at module level
+context_cache = {}
+CACHE_TTL = 3600  # 1 hour in seconds
+MAX_CACHE_SIZE = 1000  # Maximum number of cache entries
+CACHE_CLEANUP_INTERVAL = 300  # Clean up cache every 5 minutes
+
+def generate_cache_key(swarm: SwarmSpec) -> str:
+    """
+    Generate a unique cache key for a swarm configuration.
+    Includes relevant fields that affect the output.
+    """
+    key_parts = [
+        swarm.name,
+        swarm.task,
+        swarm.swarm_type,
+        str(swarm.max_loops),
+        str(swarm.return_history),
+    ]
+    
+    # Add agent configurations to the key
+    if swarm.agents:
+        agent_configs = []
+        for agent in swarm.agents:
+            agent_config = {
+                "name": agent.agent_name,
+                "model": agent.model_name,
+                "prompt": agent.system_prompt,
+                "temp": agent.temperature,
+                "max_loops": agent.max_loops,
+            }
+            agent_configs.append(str(agent_config))
+        key_parts.extend(agent_configs)
+    
+    # Add tasks and messages if present
+    if swarm.tasks:
+        key_parts.append(str(swarm.tasks))
+    if swarm.messages:
+        key_parts.append(str(swarm.messages))
+    
+    return "|".join(key_parts)
+
+def cleanup_cache():
+    """
+    Clean up expired cache entries and enforce size limits.
+    """
+    current_time = time()
+    
+    # Remove expired entries
+    expired_keys = [
+        key for key, value in context_cache.items()
+        if current_time - value["timestamp"] >= CACHE_TTL
+    ]
+    for key in expired_keys:
+        del context_cache[key]
+    
+    # If still over size limit, remove oldest entries
+    if len(context_cache) > MAX_CACHE_SIZE:
+        sorted_entries = sorted(
+            context_cache.items(),
+            key=lambda x: x[1]["timestamp"]
+        )
+        entries_to_remove = sorted_entries[:len(context_cache) - MAX_CACHE_SIZE]
+        for key, _ in entries_to_remove:
+            del context_cache[key]
+
 async def run_swarm_completion(
     swarm: SwarmSpec, x_api_key: str = None
 ) -> Dict[str, Any]:
@@ -712,8 +777,18 @@ async def run_swarm_completion(
     """
     try:
         swarm_name = swarm.name
-
         agents = swarm.agents
+
+        # Generate cache key based on swarm configuration
+        cache_key = generate_cache_key(swarm)
+        
+        # Check if we have a valid cached result
+        current_time = time()
+        if cache_key in context_cache:
+            cached_result = context_cache[cache_key]
+            if current_time - cached_result["timestamp"] < CACHE_TTL:
+                logger.info(f"Using cached result for swarm {swarm_name}")
+                return cached_result["response"]
 
         await log_api_request(x_api_key, swarm.model_dump())
 
@@ -749,10 +824,8 @@ async def run_swarm_completion(
             "swarm_name": swarm_name,
             "description": swarm.description,
             "swarm_type": swarm.swarm_type,
-            # "task": swarm.task,
             "output": result,
             "number_of_agents": length_of_agents,
-            # "input_config": swarm.model_dump(),
         }
 
         if swarm.tasks is not None:
@@ -761,7 +834,16 @@ async def run_swarm_completion(
         if swarm.messages is not None:
             response["messages"] = swarm.messages
 
-        # logger.info(response)
+        # Cache the response
+        context_cache[cache_key] = {
+            "response": response,
+            "timestamp": current_time
+        }
+
+        # Clean up cache periodically
+        if current_time % CACHE_CLEANUP_INTERVAL < 1:  # Check every ~5 minutes
+            cleanup_cache()
+
         await log_api_request(x_api_key, response)
 
         return response
@@ -1264,6 +1346,21 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
         )
 
 
+# Cache for agent configurations and results
+agent_cache = {}
+CACHE_TTL = 300  # 5 minutes
+CACHE_CLEANUP_INTERVAL = 60  # 1 minute
+
+def cleanup_agent_cache():
+    """Clean up expired cache entries"""
+    current_time = time()
+    expired_keys = [
+        k for k, v in agent_cache.items() 
+        if current_time - v["timestamp"] > CACHE_TTL
+    ]
+    for k in expired_keys:
+        del agent_cache[k]
+
 @app.post(
     "/v1/agent/completions",
     dependencies=[
@@ -1278,6 +1375,16 @@ async def run_agent(
     Run an agent with the specified task.
     """
     try:
+        current_time = time()
+        
+        # Check cache first
+        cache_key = f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
+        if cache_key in agent_cache:
+            cached_data = agent_cache[cache_key]
+            if current_time - cached_data["timestamp"] <= CACHE_TTL:
+                logger.debug("Returning cached agent result")
+                return cached_data["response"]
+
         # Validate agent configuration
         if not agent_completion.agent_config.agent_name:
             raise HTTPException(
@@ -1286,7 +1393,7 @@ async def run_agent(
 
         try:
             # Create agent from the config
-            agent = Agent(**agent_completion.agent_config.model_dump())
+            agent = Agent(**agent_completion.agent_config.model_dump(), output_type="dict-all-except-first",)
         except ValueError as ve:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1316,6 +1423,16 @@ async def run_agent(
             "outputs": result,
             "timestamp": datetime.now(UTC).isoformat(),
         }
+
+        # Cache the result
+        agent_cache[cache_key] = {
+            "response": output,
+            "timestamp": current_time
+        }
+
+        # Clean up cache periodically
+        if current_time % CACHE_CLEANUP_INTERVAL < 1:
+            cleanup_agent_cache()
 
         try:
             log_api_request(api_key=x_api_key, data=output)
