@@ -683,7 +683,9 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
 
 
 # Add this function after your get_supabase_client() function
-async def log_api_request(api_key: str, data: Dict[str, Any]) -> None:
+async def log_api_request(
+    api_key: str, data: Union[Dict[str, Any], BaseModel, list]
+) -> None:
     """
     Log API request data to Supabase swarms_api_logs table.
 
@@ -692,6 +694,16 @@ async def log_api_request(api_key: str, data: Dict[str, Any]) -> None:
         data: Dictionary containing request data to log
     """
     try:
+
+        if isinstance(data, BaseModel):
+            data = data.model_dump()
+
+        if isinstance(data, list):
+            data = [
+                item.model_dump() if isinstance(item, BaseModel) else item
+                for item in data
+            ]
+
         supabase_client = get_supabase_client()
 
         # Create log entry
@@ -1208,6 +1220,159 @@ def calculate_agent_cost(
         raise ValueError(f"Failed to calculate agent cost: {str(e)}")
 
 
+async def _run_agent_completion(
+    agent_completion: AgentCompletion, x_api_key=Header(...)
+) -> Dict[str, Any]:
+    """
+    Run an agent with the specified task.
+    """
+    try:
+        current_time = time()
+
+        # Check cache first
+        cache_key = (
+            f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
+        )
+        if cache_key in agent_cache:
+            cached_data = agent_cache[cache_key]
+            if current_time - cached_data["timestamp"] <= CACHE_TTL:
+                logger.debug("Returning cached agent result")
+                return cached_data["response"]
+
+        # Validate agent configuration
+        if not agent_completion.agent_config.agent_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
+            )
+
+        try:
+            # Create agent from the config
+            agent = Agent(
+                **agent_completion.agent_config.model_dump(),
+                output_type="dict-all-except-first",
+            )
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid agent configuration: {str(ve)}",
+            )
+
+        try:
+            # Run the agent with the provided task
+            result = agent.run(task=agent_completion.task)
+        except Exception as run_error:
+            logger.error(f"Agent execution failed: {str(run_error)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Agent execution failed: {str(run_error)}",
+            )
+
+        # Generate a unique id
+        try:
+            unique_id = generate_key("agent")
+        except Exception as key_error:
+            logger.error(f"Failed to generate unique ID: {str(key_error)}")
+            unique_id = str(uuid4())  # Fallback to UUID if key generation fails
+
+        # Calculate tokens once and reuse
+        input_text = agent_completion.task + agent.system_prompt + agent.name
+        input_tokens = count_tokens(input_text)
+        output_tokens = count_tokens(any_to_str(result))
+
+        usage_data = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+
+        output = {
+            "id": unique_id,
+            "success": True,
+            "name": agent.name,
+            "description": agent.description,
+            "temperature": agent.temperature,
+            "outputs": result,
+            "usage": usage_data,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        # Cache the result
+        agent_cache[cache_key] = {"response": output, "timestamp": current_time}
+
+        # Clean up cache periodically
+        if current_time % CACHE_CLEANUP_INTERVAL < 1:
+            cleanup_agent_cache()
+
+        try:
+            log_api_request(api_key=x_api_key, data=output)
+        except Exception as log_error:
+            logger.error(f"Failed to log API request: {str(log_error)}")
+            # Continue execution even if logging fails
+
+        return output
+    except HTTPException:
+        # Re-raise HTTP exceptions as they're already properly formatted
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error running agent: {str(e)}")
+        logger.exception(e)  # Log full traceback
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}",
+        )
+
+
+def batched_agent_completion(
+    agent_completions: List[AgentCompletion],
+    x_api_key: str,
+) -> List[Dict[str, Any]]:
+    """
+    Process multiple agent completions in parallel batches.
+
+    Args:
+        agent_completions (List[AgentCompletion]): List of agent completion tasks to process
+        x_api_key (str): API key for authentication
+        batch_size (int, optional): Maximum number of concurrent workers. Defaults to 10.
+
+    Returns:
+        List[Dict[str, Any]]: List of results from completed agent tasks
+
+    Raises:
+        ValueError: If agent_completions is empty
+        Exception: For any unexpected errors during batch processing
+    """
+    if not agent_completions:
+        raise ValueError("No agent completions provided")
+
+    results = []
+    try:
+        with ThreadPoolExecutor(max_workers=len(os.cpu_count() * 2)) as executor:
+            futures = [
+                executor.submit(_run_agent_completion, agent_completion, x_api_key)
+                for agent_completion in agent_completions
+            ]
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Error in batch completion: {str(e)}")
+                    # Add failed result to maintain order
+                    results.append(
+                        {
+                            "success": False,
+                            "error": str(e),
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
+    except Exception as e:
+        logger.error(f"Failed to initialize batch processing: {str(e)}")
+        raise Exception(f"Batch processing failed: {str(e)}")
+
+    return results
+
+
 async def get_swarm_types() -> List[str]:
     """Returns a list of available swarm types"""
     return [
@@ -1414,98 +1579,70 @@ async def run_agent(
     Run an agent with the specified task.
     """
     try:
-        current_time = time()
-
-        # Check cache first
-        cache_key = (
-            f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
-        )
-        if cache_key in agent_cache:
-            cached_data = agent_cache[cache_key]
-            if current_time - cached_data["timestamp"] <= CACHE_TTL:
-                logger.debug("Returning cached agent result")
-                return cached_data["response"]
-
-        # Validate agent configuration
-        if not agent_completion.agent_config.agent_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
-            )
-
-        try:
-            # Create agent from the config
-            agent = Agent(
-                **agent_completion.agent_config.model_dump(),
-                output_type="dict-all-except-first",
-            )
-        except ValueError as ve:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid agent configuration: {str(ve)}",
-            )
-
-        try:
-            # Run the agent with the provided task
-            result = agent.run(task=agent_completion.task)
-        except Exception as run_error:
-            logger.error(f"Agent execution failed: {str(run_error)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Agent execution failed: {str(run_error)}",
-            )
-
-        # Generate a unique id
-        try:
-            unique_id = generate_key("agent")
-        except Exception as key_error:
-            logger.error(f"Failed to generate unique ID: {str(key_error)}")
-            unique_id = str(uuid4())  # Fallback to UUID if key generation fails
-
-        # Calculate tokens once and reuse
-        input_text = agent_completion.task + agent.system_prompt + agent.name
-        input_tokens = count_tokens(input_text)
-        output_tokens = count_tokens(any_to_str(result))
-
-        usage_data = {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens,
-        }
-
-        output = {
-            "id": unique_id,
-            "success": True,
-            "name": agent.name,
-            "description": agent.description,
-            "temperature": agent.temperature,
-            "outputs": result,
-            "usage": usage_data,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-
-        # Cache the result
-        agent_cache[cache_key] = {"response": output, "timestamp": current_time}
-
-        # Clean up cache periodically
-        if current_time % CACHE_CLEANUP_INTERVAL < 1:
-            cleanup_agent_cache()
-
-        try:
-            log_api_request(api_key=x_api_key, data=output)
-        except Exception as log_error:
-            logger.error(f"Failed to log API request: {str(log_error)}")
-            # Continue execution even if logging fails
-
-        return output
-    except HTTPException:
-        # Re-raise HTTP exceptions as they're already properly formatted
-        raise
+        return await _run_agent_completion(agent_completion, x_api_key)
     except Exception as e:
-        logger.error(f"Unexpected error running agent: {str(e)}")
+        logger.error(f"Error running agent: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
+
+@app.post(
+    "/v1/agent/batch/completions",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(rate_limiter),
+    ],
+)
+async def run_agent_batch(
+    agent_completions: List[AgentCompletion], x_api_key=Header(...)
+) -> List[Dict[str, Any]]:
+    """
+    Run a batch of agents with the specified tasks using a thread pool.
+
+    Args:
+        agent_completions: List of agent completion tasks to process
+        x_api_key: API key for authentication
+
+    Returns:
+        List[Dict[str, Any]]: List of results from completed agent tasks
+
+    Raises:
+        HTTPException: If there's an error processing the batch
+    """
+    if not agent_completions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No agent completions provided",
+        )
+
+    try:
+        logger.info(f"Running batch of {len(agent_completions)} agents")
+
+        # Log the incoming request
+        try:
+            await log_api_request(x_api_key, agent_completions)
+        except Exception as log_error:
+            logger.warning(f"Failed to log incoming request: {str(log_error)}")
+
+        # Process the batch
+        results = await batched_agent_completion(agent_completions, x_api_key)
+
+        # Log the results
+        try:
+            await log_api_request(x_api_key, results)
+        except Exception as log_error:
+            logger.warning(f"Failed to log results: {str(log_error)}")
+
+        logger.info(f"Successfully completed batch of {len(results)} agents")
+        return results
+
+    except Exception as e:
+        logger.error(f"Error running agent batch: {str(e)}")
         logger.exception(e)  # Log full traceback
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}",
+            detail=f"Failed to process agent batch: {str(e)}",
         )
 
 

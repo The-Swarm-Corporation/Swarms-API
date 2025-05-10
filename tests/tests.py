@@ -367,12 +367,9 @@ class SwarmAPITest:
                         {
                             "name": "search",
                             "description": "Search for information on the web",
-                            "parameters": {
-                                "query": "string",
-                                "num_results": "integer"
-                            }
+                            "parameters": {"query": "string", "num_results": "integer"},
                         }
-                    ]
+                    ],
                 },
                 "task": "Search for information about Python async programming.",
             }
