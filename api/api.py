@@ -819,9 +819,6 @@ async def run_swarm_completion(
 
         # Handle flex processing
         max_retries = 3 if swarm.service_tier == "flex" else 1
-        base_timeout = (
-            900.0 if swarm.service_tier == "flex" else 300.0
-        )  # 15 minutes for flex, 5 minutes for standard
 
         for attempt in range(max_retries):
             try:

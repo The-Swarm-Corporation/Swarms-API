@@ -68,8 +68,3 @@ if __name__ == "__main__":
     if agent_result:
         formatter.print_panel(json.dumps(agent_result, indent=4))
     print("\n" + "=" * 50 + "\n")
-
-    # logs = get_logs()
-    # logs = json.dumps(logs, indent=4)
-    # print("Logs:")
-    # print(logs)
