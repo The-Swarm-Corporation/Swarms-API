@@ -36,7 +36,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from litellm import model_list
 from loguru import logger
 from pydantic import BaseModel, Field
-from swarms import Agent, SwarmRouter, SwarmType
+from swarms import Agent, SwarmRouter
+from swarms.structs.swarm_router import SwarmType
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
 
