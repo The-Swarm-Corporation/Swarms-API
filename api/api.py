@@ -1516,7 +1516,9 @@ async def check_swarm_types() -> Dict[Any, Any]:
     """
     Check the available swarm types.
     """
-    swarm_types = get_swarm_types()
+
+    # Await
+    swarm_types = await get_swarm_types()
 
     out = {
         "success": True,
