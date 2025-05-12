@@ -1286,7 +1286,7 @@ async def _run_agent_completion(
             "id": unique_id,
             "success": True,
             "name": agent.name,
-            "description": agent.description,
+            "description": agent_completion.agent_config.description,
             "temperature": agent.temperature,
             "outputs": result,
             "usage": usage_data,
@@ -1343,7 +1343,7 @@ def batched_agent_completion(
 
     results = []
     try:
-        with ThreadPoolExecutor(max_workers=len(os.cpu_count() * 2)) as executor:
+        with ThreadPoolExecutor(max_workers=os.cpu_count() * 2) as executor:
             futures = [
                 executor.submit(_run_agent_completion, agent_completion, x_api_key)
                 for agent_completion in agent_completions
