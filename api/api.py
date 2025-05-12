@@ -1541,7 +1541,7 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
     Run a swarm with the specified task.
     """
     try:
-        
+
         return await run_swarm_completion(swarm, x_api_key)
     except Exception as e:
         logger.error(f"Error running swarm: {str(e)}")
