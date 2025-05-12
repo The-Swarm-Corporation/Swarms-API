@@ -1541,6 +1541,7 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
     Run a swarm with the specified task.
     """
     try:
+        
         return await run_swarm_completion(swarm, x_api_key)
     except Exception as e:
         logger.error(f"Error running swarm: {str(e)}")
@@ -1619,27 +1620,31 @@ async def run_agent_batch(
     try:
         logger.info(f"Running batch of {len(agent_completions)} agents")
 
-        # Log the incoming request
-        try:
-            await log_api_request(x_api_key, agent_completions)
-        except Exception as log_error:
-            logger.warning(f"Failed to log incoming request: {str(log_error)}")
+        # Process logging concurrently with the main task
+        async def log_request():
+            try:
+                await log_api_request(x_api_key, agent_completions)
+            except Exception as log_error:
+                logger.warning(f"Failed to log incoming request: {str(log_error)}")
 
-        # Process the batch
+        # Start logging in background
+        log_task = asyncio.create_task(log_request())
+
+        # Process the batch with optimized concurrency
         results = await batched_agent_completion(agent_completions, x_api_key)
 
-        # Log the results
-        try:
-            await log_api_request(x_api_key, results)
-        except Exception as log_error:
-            logger.warning(f"Failed to log results: {str(log_error)}")
+        # Wait for logging to complete
+        await log_task
+
+        # Log results in background without waiting
+        asyncio.create_task(log_api_request(x_api_key, results))
 
         logger.info(f"Successfully completed batch of {len(results)} agents")
         return results
 
     except Exception as e:
         logger.error(f"Error running agent batch: {str(e)}")
-        logger.exception(e)  # Log full traceback
+        logger.exception(e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process agent batch: {str(e)}",
