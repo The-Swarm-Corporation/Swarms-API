@@ -1,5 +1,3 @@
-# tools - search, code executor, create api
-
 import os
 import requests
 from dotenv import load_dotenv
