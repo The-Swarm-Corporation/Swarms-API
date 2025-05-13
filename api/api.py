@@ -37,7 +37,6 @@ from litellm import model_list
 from loguru import logger
 from pydantic import BaseModel, Field
 from swarms import Agent, SwarmRouter
-from swarms.structs.swarm_router import SwarmType
 from swarms.utils.any_to_str import any_to_str
 from swarms.utils.litellm_tokenizer import count_tokens
 
@@ -54,6 +53,22 @@ OutputType = Literal[
     ".toml",
     "string",
     "str",
+]
+
+SwarmType = Literal[
+    "AgentRearrange",
+    "MixtureOfAgents",
+    "SpreadSheetSwarm",
+    "SequentialWorkflow",
+    "ConcurrentWorkflow",
+    "GroupChat",
+    "MultiAgentRouter",
+    "AutoSwarmBuilder",
+    "HiearchicalSwarm",
+    "auto",
+    "MajorityVoting",
+    "MALT",
+    "DeepResearchSwarm",
 ]
 
 agent_types = Literal[
@@ -270,46 +285,6 @@ class SwarmSpec(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
-
-
-class ReasoningAgentSpec(BaseModel):
-    agent_name: Optional[str] = Field(
-        None, description="The name of the reasoning agent."
-    )
-    description: Optional[str] = Field(
-        None, description="A description of the reasoning agent's capabilities."
-    )
-    model_name: Optional[str] = Field(
-        default="gpt-4o-mini",
-        description="The name of the model to use for the reasoning agent.",
-    )
-    system_prompt: Optional[str] = Field(
-        None, description="The system prompt to use for the reasoning agent."
-    )
-    max_loops: Optional[int] = Field(
-        default=1,
-        description="The maximum number of execution loops allowed for the reasoning agent.",
-    )
-    swarm_type: Optional[agent_types] = Field(
-        default="AgentJudge", description="The type of swarm architecture to use."
-    )
-    num_samples: Optional[int] = Field(
-        default=1, description="The number of samples to generate."
-    )
-    output_type: Optional[str] = Field(  # type: ignore
-        default="dict", description="The type of output to generate."
-    )
-    num_knowledge_items: Optional[int] = Field(
-        default=1, description="The number of knowledge items to use."
-    )
-    memory_capacity: Optional[int] = Field(
-        default=1, description="The memory capacity of the reasoning agent."
-    )
-    task: Optional[str] = Field(None, description="The task to complete.")
-
-    class Config:
-        arbitrary_types_allowed = True
-
 
 async def capture_telemetry(request: Request) -> Dict[str, Any]:
     """
