@@ -9,8 +9,8 @@ from swarms.utils.formatter import formatter
 load_dotenv()
 
 API_KEY = os.getenv("SWARMS_API_KEY")
-# BASE_URL = "https://swarms-api-285321057562.us-east1.run.app"
-BASE_URL = "https://api.swarms.world"
+BASE_URL = "https://swarms-api-285321057562.us-east1.run.app"
+# BASE_URL = "https://api.swarms.world"
 
 
 headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}

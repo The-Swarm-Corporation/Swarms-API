@@ -4,6 +4,7 @@ import os
 import requests
 from dotenv import load_dotenv
 import json
+from swarms.utils.formatter import formatter
 
 load_dotenv()
 
@@ -84,8 +85,7 @@ def run_single_swarm():
 
 if __name__ == "__main__":
     result = run_single_swarm()
-    print("Swarm Result:")
-    print(result)
+    formatter.print_panel(result, "Swarm Result")
 
     # logs = get_logs()
     # logs = json.dumps(logs, indent=4)
