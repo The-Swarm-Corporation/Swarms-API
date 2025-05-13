@@ -286,6 +286,7 @@ class SwarmSpec(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
+
 async def capture_telemetry(request: Request) -> Dict[str, Any]:
     """
     Captures comprehensive telemetry data from incoming requests including:
