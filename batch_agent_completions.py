@@ -1,7 +1,8 @@
 # tools - search, code executor, create api
 
 import os
-import requests
+import aiohttp
+import asyncio
 from dotenv import load_dotenv
 import json
 from swarms.utils.formatter import formatter
@@ -12,11 +13,10 @@ API_KEY = os.getenv("SWARMS_API_KEY")
 BASE_URL = "https://swarms-api-285321057562.us-east1.run.app"
 # BASE_URL = "https://api.swarms.world"
 
-
 headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
 
-def run_batch_agents(payloads):
+async def run_batch_agents(payloads):
     """Run multiple agents in batch with the AgentCompletion format
 
     Args:
@@ -26,18 +26,18 @@ def run_batch_agents(payloads):
         list: List of responses from each agent
     """
     try:
-        response = requests.post(
-            f"{BASE_URL}/v1/agent/batch/completions", headers=headers, json=payloads
-        )
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{BASE_URL}/v1/agent/batch/completions", headers=headers, json=payloads
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
+    except aiohttp.ClientError as e:
         print(f"Error making batch request: {e}")
         return None
 
 
-if __name__ == "__main__":
-
+async def main():
     # Example batch payloads
     batch_payloads = [
         {
@@ -81,6 +81,10 @@ if __name__ == "__main__":
 
     # Run batch agents
     print("Running Batch Agents:")
-    batch_results = run_batch_agents(batch_payloads)
+    batch_results = await run_batch_agents(batch_payloads)
     if batch_results:
         formatter.print_panel(json.dumps(batch_results, indent=4))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

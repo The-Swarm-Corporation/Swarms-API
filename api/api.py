@@ -1296,17 +1296,16 @@ async def _run_agent_completion(
         )
 
 
-def batched_agent_completion(
+async def batched_agent_completion(
     agent_completions: List[AgentCompletion],
     x_api_key: str,
 ) -> List[Dict[str, Any]]:
     """
-    Process multiple agent completions in parallel batches.
+    Process multiple agent completions in parallel using asyncio.gather.
 
     Args:
         agent_completions (List[AgentCompletion]): List of agent completion tasks to process
         x_api_key (str): API key for authentication
-        batch_size (int, optional): Maximum number of concurrent workers. Defaults to 10.
 
     Returns:
         List[Dict[str, Any]]: List of results from completed agent tasks
@@ -1318,33 +1317,34 @@ def batched_agent_completion(
     if not agent_completions:
         raise ValueError("No agent completions provided")
 
-    results = []
     try:
-        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-            futures = [
-                executor.submit(_run_agent_completion, agent_completion, x_api_key)
-                for agent_completion in agent_completions
-            ]
+        # Create tasks for all agent completions
+        tasks = [
+            _run_agent_completion(agent_completion, x_api_key)
+            for agent_completion in agent_completions
+        ]
 
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Error in batch completion: {str(e)}")
-                    # Add failed result to maintain order
-                    results.append(
-                        {
-                            "success": False,
-                            "error": str(e),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                        }
-                    )
+        # Run all tasks concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results and handle any exceptions
+        processed_results = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Error in batch completion: {str(result)}")
+                processed_results.append({
+                    "success": False,
+                    "error": str(result),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+            else:
+                processed_results.append(result)
+
+        return processed_results
+
     except Exception as e:
         logger.error(f"Failed to initialize batch processing: {str(e)}")
         raise Exception(f"Batch processing failed: {str(e)}")
-
-    return results
 
 
 async def get_swarm_types() -> List[str]:
