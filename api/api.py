@@ -1295,13 +1295,12 @@ async def _run_agent_completion(
             detail=f"An unexpected error occurred: {str(e)}",
         )
 
-
-async def batched_agent_completion(
+def batched_agent_completion(
     agent_completions: List[AgentCompletion],
     x_api_key: str,
 ) -> List[Dict[str, Any]]:
     """
-    Process multiple agent completions in parallel using asyncio.gather.
+    Process multiple agent completions sequentially.
 
     Args:
         agent_completions (List[AgentCompletion]): List of agent completion tasks to process
@@ -1318,27 +1317,18 @@ async def batched_agent_completion(
         raise ValueError("No agent completions provided")
 
     try:
-        # Create tasks for all agent completions
-        tasks = [
-            _run_agent_completion(agent_completion, x_api_key)
-            for agent_completion in agent_completions
-        ]
-
-        # Run all tasks concurrently
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Process results and handle any exceptions
         processed_results = []
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Error in batch completion: {str(result)}")
+        for agent_completion in agent_completions:
+            try:
+                result = _run_agent_completion(agent_completion, x_api_key)
+                processed_results.append(result)
+            except Exception as e:
+                logger.error(f"Error processing agent completion: {str(e)}")
                 processed_results.append({
                     "success": False,
-                    "error": str(result),
+                    "error": str(e),
                     "timestamp": datetime.now(UTC).isoformat(),
                 })
-            else:
-                processed_results.append(result)
 
         return processed_results
 
