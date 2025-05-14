@@ -1295,6 +1295,7 @@ async def _run_agent_completion(
             detail=f"An unexpected error occurred: {str(e)}",
         )
 
+
 def batched_agent_completion(
     agent_completions: List[AgentCompletion],
     x_api_key: str,
@@ -1324,11 +1325,13 @@ def batched_agent_completion(
                 processed_results.append(result)
             except Exception as e:
                 logger.error(f"Error processing agent completion: {str(e)}")
-                processed_results.append({
-                    "success": False,
-                    "error": str(e),
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
+                processed_results.append(
+                    {
+                        "success": False,
+                        "error": str(e),
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
 
         return processed_results
 
