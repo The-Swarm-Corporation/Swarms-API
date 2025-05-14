@@ -1,5 +1,6 @@
 import os
-import requests
+import aiohttp
+import asyncio
 from dotenv import load_dotenv
 import json
 from swarms.utils.formatter import formatter
@@ -10,17 +11,16 @@ API_KEY = os.getenv("SWARMS_API_KEY")
 BASE_URL = "https://swarms-api-285321057562.us-east1.run.app"
 # BASE_URL = "https://api.swarms.world"
 
-
 headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
 
-def run_health_check():
+async def run_health_check(session):
     """Check if the API is healthy"""
-    response = requests.get(f"{BASE_URL}/health", headers=headers)
-    return response.json()
+    async with session.get(f"{BASE_URL}/health", headers=headers) as response:
+        return await response.json()
 
 
-def run_single_agent():
+async def run_single_agent(session):
     """Run a single agent with the new AgentCompletion format"""
     payload = {
         "agent_config": {
@@ -43,26 +43,31 @@ def run_single_agent():
     }
 
     try:
-        response = requests.post(
+        async with session.post(
             f"{BASE_URL}/v1/agent/completions", headers=headers, json=payload
-        )
-        response.raise_for_status()  # Raise an exception for bad status codes
-        return response.json()
-    except requests.exceptions.RequestException as e:
+        ) as response:
+            response.raise_for_status()
+            return await response.json()
+    except aiohttp.ClientError as e:
         print(f"Error making request: {e}")
         return None
 
 
-if __name__ == "__main__":
-    # Check API health
-    health = run_health_check()
-    print("API Health Check:")
-    formatter.print_panel(json.dumps(health, indent=4))
-    print("\n" + "=" * 50 + "\n")
+async def main():
+    async with aiohttp.ClientSession() as session:
+        # Check API health
+        health = await run_health_check(session)
+        print("API Health Check:")
+        formatter.print_panel(json.dumps(health, indent=4))
+        print("\n" + "=" * 50 + "\n")
 
-    # Run single agent
-    print("Running Single Agent:")
-    agent_result = run_single_agent()
-    if agent_result:
-        formatter.print_panel(json.dumps(agent_result, indent=4))
-    print("\n" + "=" * 50 + "\n")
+        # Run single agent
+        print("Running Single Agent:")
+        agent_result = await run_single_agent(session)
+        if agent_result:
+            formatter.print_panel(json.dumps(agent_result, indent=4))
+        print("\n" + "=" * 50 + "\n")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

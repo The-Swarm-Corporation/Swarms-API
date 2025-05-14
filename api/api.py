@@ -1320,7 +1320,7 @@ def batched_agent_completion(
 
     results = []
     try:
-        with ThreadPoolExecutor(max_workers=os.cpu_count() * 2) as executor:
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = [
                 executor.submit(_run_agent_completion, agent_completion, x_api_key)
                 for agent_completion in agent_completions
