@@ -100,12 +100,6 @@ request_counts = defaultdict(lambda: {"count": 0, "start_time": time()})
 # In-memory store for scheduled jobs
 scheduled_jobs: Dict[str, Dict] = {}
 
-app = FastAPI(
-    title="Swarms API",
-    description="The Swarms API is a powerful tool for managing and executing multi-agent systems with ease. It provides a flexible model support, diverse swarm architectures, dynamic agent configuration, and real-time monitoring capabilities.",
-)
-
-
 def generate_key(prefix: str = "swarms") -> str:
     """
     Generates an API key similar to OpenAI's format (sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX).
