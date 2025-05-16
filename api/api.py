@@ -402,33 +402,57 @@ def verify_api_key(x_api_key: str = Header(...)) -> None:
         raise HTTPException(status_code=403, detail="Invalid API Key")
 
 
-async def get_api_key_logs(api_key: str) -> List[Dict[str, Any]]:
+@lru_cache(maxsize=1000)
+def get_all_api_keys_for_user(user_id: str) -> List[str]:
     """
-    Retrieve all API request logs for a specific API key.
+    Retrieve all API keys associated with a user ID.
 
     Args:
-        api_key: The API key to query logs for
+        user_id (str): The user's ID
 
     Returns:
-        List[Dict[str, Any]]: List of log entries for the API key
+        List[str]: All API keys belonging to the user
+    """
+    supabase_client = get_supabase_client()
+    response = (
+        supabase_client.table("swarms_cloud_api_keys")
+        .select("key")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return [entry["key"] for entry in response.data]
+
+
+async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
+    """
+    Retrieve all API request logs for a specific user across all their keys.
+
+    Args:
+        user_id (str): The user ID
+
+    Returns:
+        List[Dict[str, Any]]: List of log entries for the user
     """
     try:
         supabase_client = get_supabase_client()
 
-        # Query swarms_api_logs table for entries matching the API key
+        api_keys = get_all_api_keys_for_user(user_id)
+        if not api_keys:
+            return []
+
         response = (
             supabase_client.table("swarms_api_logs")
             .select("*")
-            .eq("api_key", api_key)
+            .in_("api_key", api_keys)
             .execute()
         )
         return response.data
 
     except Exception as e:
-        logger.error(f"Error retrieving API logs: {str(e)}")
+        logger.error(f"Error retrieving logs for user {user_id}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve API logs: {str(e)}",
+            detail=f"Failed to retrieve user logs: {str(e)}",
         )
 
 
@@ -1675,21 +1699,24 @@ def run_batch_completions(
 )
 async def get_logs(x_api_key: str = Header(...)) -> Dict[str, Any]:
     """
-    Get all API request logs for the provided API key.
+    Get all API request logs for the user associated with the provided API key.
     """
     try:
-        logs = await get_api_key_logs(x_api_key)
+        user_id = get_user_id_from_api_key(x_api_key)
+        logs = await get_user_logs(user_id)
         return {
             "status": "success",
             "count": len(logs),
             "logs": logs,
             "timestamp": datetime.now(UTC).isoformat(),
         }
+
     except Exception as e:
         logger.error(f"Error in get_logs endpoint: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
+
 
 
 @app.get(
