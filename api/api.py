@@ -100,6 +100,7 @@ request_counts = defaultdict(lambda: {"count": 0, "start_time": time()})
 # In-memory store for scheduled jobs
 scheduled_jobs: Dict[str, Dict] = {}
 
+
 def generate_key(prefix: str = "swarms") -> str:
     """
     Generates an API key similar to OpenAI's format (sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX).
@@ -1716,7 +1717,6 @@ async def get_logs(x_api_key: str = Header(...)) -> Dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
-
 
 
 @app.get(
