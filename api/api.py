@@ -191,6 +191,10 @@ class AgentCompletion(BaseModel):
         ..., description="The configuration of the agent to be completed."
     )
     task: str = Field(..., description="The task to be completed by the agent.")
+    history: Optional[Dict[str, Any]] = Field(
+        None,
+        description="The history of the agent's previous tasks and responses.",
+    )
 
     class Config:
         arbitrary_types_allowed = True
@@ -1222,6 +1226,15 @@ async def _run_agent_completion(
     try:
         current_time = time()
 
+        if agent_completion.history is not None:
+            # Format the dictionary with keys and values on separate lines
+            history_str = "\n".join(
+                [f"{k}:\n{v}" for k, v in agent_completion.history.items()]
+            )
+            history_prompt = f"History: {history_str}\n\n"
+        else:
+            history_prompt = ""
+
         # Check cache first
         cache_key = (
             f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
@@ -1252,7 +1265,10 @@ async def _run_agent_completion(
 
         try:
             # Run the agent with the provided task
-            result = agent.run(task=agent_completion.task)
+            if agent_completion.history is not None:
+                result = agent.run(task=history_prompt + agent_completion.task)
+            else:
+                result = agent.run(task=agent_completion.task)
         except Exception as run_error:
             logger.error(f"Agent execution failed: {str(run_error)}")
             raise HTTPException(
