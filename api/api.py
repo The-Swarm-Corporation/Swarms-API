@@ -187,17 +187,21 @@ class AgentSpec(BaseModel):
 
 
 class AgentCompletion(BaseModel):
-    agent_config: AgentSpec = Field(
-        ..., description="The configuration of the agent to be completed."
+    agent_config: Optional[AgentSpec] = Field(
+        None, description="The configuration of the agent to be completed."
     )
-    task: str = Field(..., description="The task to be completed by the agent.")
+    task: Optional[str] = Field(
+        None, description="The task to be completed by the agent."
+    )
     history: Optional[Dict[str, Any]] = Field(
-        None,
+        default=None,
         description="The history of the agent's previous tasks and responses.",
     )
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+        "populate_by_name": True,
+    }
 
 
 class Agents(BaseModel):
