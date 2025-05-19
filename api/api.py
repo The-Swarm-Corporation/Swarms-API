@@ -1259,9 +1259,14 @@ async def _run_agent_completion(
         ]
         combined_prompt = "".join(prompt_parts)
         await count_and_validate_prompts(combined_prompt)
-        
-        
         await check_model_name(agent_completion.agent_config.model_name)
+        
+        # Validate agent configuration
+        if not agent_completion.agent_config.agent_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
+            )
+
         
         current_time = time()
 
@@ -1284,54 +1289,20 @@ async def _run_agent_completion(
                 logger.debug("Returning cached agent result")
                 return cached_data["response"]
 
-        # Validate agent configuration
-        if not agent_completion.agent_config.agent_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
-            )
-        
 
-        try:
-            # Create agent from the config
-            agent = Agent(
-                **agent_completion.agent_config.model_dump(),
-                output_type="dict-all-except-first",
-            )
-        except ValueError as ve:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid agent configuration: {str(ve)}",
-            )
+        # Create agent from the config
+        agent = Agent(
+            **agent_completion.agent_config.model_dump(),
+            output_type="dict-all-except-first",
+        )
 
-        try:
-            # Run the agent with the provided task
-            if agent_completion.history is not None:
-                result = agent.run(task=history_prompt + agent_completion.task)
-            else:
-                result = agent.run(task=agent_completion.task)
-        except Exception as run_error:
-            logger.error(f"Agent execution failed: {str(run_error)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Agent execution failed: {str(run_error)}",
-            )
+        # Run the agent with the provided task
+        if agent_completion.history is not None:
+            result = agent.run(task=history_prompt + agent_completion.task)
+        else:
+            result = agent.run(task=agent_completion.task)
 
-        # Generate a unique id
-        try:
-            unique_id = generate_key("agent")
-        except Exception as key_error:
-            logger.error(f"Failed to generate unique ID: {str(key_error)}")
-            unique_id = str(uuid4())  # Fallback to UUID if key generation fails
-
-        # Calculate tokens once and reuse
-        input_parts = [
-            agent_completion.task or "",
-            agent.system_prompt or "",
-            agent.name or "",
-            agent_completion.history or ""
-        ]
-        input_text = "".join(input_parts)
-        input_tokens = count_tokens(input_text)
+        input_tokens = count_tokens(combined_prompt)
         output_tokens = count_tokens(any_to_str(result))
 
         usage_data = {
@@ -1341,7 +1312,7 @@ async def _run_agent_completion(
         }
 
         output = {
-            "id": unique_id,
+            "id": generate_key("agent"),
             "success": True,
             "name": agent.name,
             "description": agent_completion.agent_config.description,
@@ -1358,11 +1329,7 @@ async def _run_agent_completion(
         if current_time % CACHE_CLEANUP_INTERVAL < 1:
             cleanup_agent_cache()
 
-        try:
-            log_api_request(api_key=x_api_key, data=output)
-        except Exception as log_error:
-            logger.error(f"Failed to log API request: {str(log_error)}")
-            # Continue execution even if logging fails
+        log_api_request(api_key=x_api_key, data=output)
 
         return output
     except HTTPException:
