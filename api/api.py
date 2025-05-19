@@ -517,7 +517,6 @@ def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]
                 agent.system_prompt or "",
                 agent.description or "",
                 agent.agent_name or "",
-                agent.history or ""
             ]
             combined_prompt = "".join(prompt_parts)
             count_and_validate_prompts(combined_prompt)
