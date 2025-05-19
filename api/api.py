@@ -512,10 +512,15 @@ async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List
     if swarm_spec.agents:
         for agent in swarm_spec.agents:
             check_model_name(agent.model_name)
-            count_and_validate_prompts(
-                agent.system_prompt + agent.description + 
-                agent.agent_name + agent.history
-            )
+            # Safely concatenate strings, handling None values
+            prompt_parts = [
+                agent.system_prompt or "",
+                agent.description or "",
+                agent.agent_name or "",
+                agent.history or ""
+            ]
+            combined_prompt = "".join(prompt_parts)
+            count_and_validate_prompts(combined_prompt)
 
     return task, tasks
 
@@ -1245,13 +1250,14 @@ async def _run_agent_completion(
     try:
         
         # Combine all strings first to avoid multiple concatenations
-        combined_prompt = "".join(filter(None, [
-            agent_completion.agent_config.system_prompt,
-            agent_completion.task,
-            agent_completion.agent_config.description,
-            agent_completion.agent_config.agent_name,
-            agent_completion.history,
-        ]))
+        prompt_parts = [
+            agent_completion.agent_config.system_prompt or "",
+            agent_completion.task or "",
+            agent_completion.agent_config.description or "",
+            agent_completion.agent_config.agent_name or "",
+            agent_completion.history or ""
+        ]
+        combined_prompt = "".join(prompt_parts)
         await count_and_validate_prompts(combined_prompt)
         
         
