@@ -554,16 +554,6 @@ def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
         if not agent_spec.model_name:
             raise ValueError("Model name is required.")
 
-        # if agent_spec.tools_dictionary is not None:
-        #     tools_list_dictionary = agent_spec.tools_dictionary
-        # else:
-        #     tools_list_dictionary = None
-
-        # if agent_spec.tools_dictionary is not None:
-        #     output_type = "dict"
-        # else:
-        #     output_type = "final"
-
         # Create the agent
         agent = Agent(
             agent_name=agent_spec.agent_name,
