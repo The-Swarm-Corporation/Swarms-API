@@ -290,6 +290,15 @@ class SwarmSpec(BaseModel):
         arbitrary_types_allowed = True
 
 
+
+
+async def check_model_name(model_name: str) -> None:
+    if model_name not in model_list:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model {model_name} is not available. Check https://litellm.io for available models.",
+        )
+
 async def capture_telemetry(request: Request) -> Dict[str, Any]:
     """
     Captures comprehensive telemetry data from incoming requests including:
@@ -464,8 +473,7 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
             detail=f"Failed to retrieve user logs: {str(e)}",
         )
 
-
-def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]]:
+async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]]:
     """
     Validates the swarm specification and returns the task(s) to be executed.
 
@@ -480,20 +488,17 @@ def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]
     Raises:
         HTTPException: If validation fails
     """
-
-    task = None
-    tasks = None
-
-    if (
-        swarm_spec.task is None
-        and swarm_spec.tasks is None
-        and swarm_spec.messages is None
-    ):
+    # Early validation
+    if not any([swarm_spec.task, swarm_spec.tasks, swarm_spec.messages]):
         raise HTTPException(
             status_code=400,
             detail="There is no task or tasks or messages provided. Please provide a valid task description to proceed.",
         )
 
+    # Determine task/tasks
+    task = None
+    tasks = None
+    
     if swarm_spec.task is not None:
         task = swarm_spec.task
     elif swarm_spec.messages is not None:
@@ -503,7 +508,30 @@ def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]
     elif swarm_spec.tasks is not None:
         tasks = swarm_spec.tasks
 
+    # Validate agents concurrently if present
+    if swarm_spec.agents:
+        validation_tasks = []
+        for agent in swarm_spec.agents:
+            validation_tasks.extend([
+                check_model_name(agent.model_name),
+                count_and_validate_prompts(
+                    agent.system_prompt + agent.description + 
+                    agent.agent_name + agent.worker + agent.history
+                )
+            ])
+        await asyncio.gather(*validation_tasks)
+
     return task, tasks
+
+
+
+async def count_and_validate_prompts(prompt: str) -> None:
+    if len(count_tokens(prompt)) > 100_000_000:
+        raise HTTPException(
+            status_code=400,
+            detail="Prompt is too long. Please provide a prompt that is less than 10000 tokens. Upgrade to a higher tier to use longer prompts at https://swarms.world/account",
+        )
+        
 
 
 def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
@@ -594,7 +622,7 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
     try:
         # Validate the swarm spec
 
-        task, tasks = validate_swarm_spec(swarm_spec)
+        task, tasks = asyncio.run(validate_swarm_spec(swarm_spec))
 
         # Create agents in parallel if specified
         agents = []
@@ -790,6 +818,7 @@ def cleanup_cache():
         entries_to_remove = sorted_entries[: len(context_cache) - MAX_CACHE_SIZE]
         for key, _ in entries_to_remove:
             del context_cache[key]
+
 
 
 async def run_swarm_completion(
@@ -1228,6 +1257,21 @@ async def _run_agent_completion(
     Run an agent with the specified task.
     """
     try:
+        
+        # Combine all strings first to avoid multiple concatenations
+        combined_prompt = "".join(filter(None, [
+            agent_completion.agent_config.system_prompt,
+            agent_completion.task,
+            agent_completion.agent_config.description,
+            agent_completion.agent_config.agent_name,
+            agent_completion.agent_config.worker,
+            agent_completion.history,
+        ]))
+        await count_and_validate_prompts(combined_prompt)
+        
+        
+        await check_model_name(agent_completion.agent_config.model_name)
+        
         current_time = time()
 
         if agent_completion.history is not None:
@@ -1254,6 +1298,7 @@ async def _run_agent_completion(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
             )
+        
 
         try:
             # Create agent from the config
@@ -1288,7 +1333,7 @@ async def _run_agent_completion(
             unique_id = str(uuid4())  # Fallback to UUID if key generation fails
 
         # Calculate tokens once and reuse
-        input_text = agent_completion.task + agent.system_prompt + agent.name
+        input_text = agent_completion.task + agent.system_prompt + agent.name + agent_completion.history
         input_tokens = count_tokens(input_text)
         output_tokens = count_tokens(any_to_str(result))
 
