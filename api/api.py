@@ -516,7 +516,7 @@ async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List
                 check_model_name(agent.model_name),
                 count_and_validate_prompts(
                     agent.system_prompt + agent.description + 
-                    agent.agent_name + agent.worker + agent.history
+                    agent.agent_name + agent.history
                 )
             ])
         await asyncio.gather(*validation_tasks)
@@ -1264,7 +1264,6 @@ async def _run_agent_completion(
             agent_completion.task,
             agent_completion.agent_config.description,
             agent_completion.agent_config.agent_name,
-            agent_completion.agent_config.worker,
             agent_completion.history,
         ]))
         await count_and_validate_prompts(combined_prompt)
