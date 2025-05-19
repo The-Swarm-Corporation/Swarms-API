@@ -508,18 +508,14 @@ async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List
     elif swarm_spec.tasks is not None:
         tasks = swarm_spec.tasks
 
-    # Validate agents concurrently if present
+    # Validate agents if present
     if swarm_spec.agents:
-        validation_tasks = []
         for agent in swarm_spec.agents:
-            validation_tasks.extend([
-                check_model_name(agent.model_name),
-                count_and_validate_prompts(
-                    agent.system_prompt + agent.description + 
-                    agent.agent_name + agent.history
-                )
-            ])
-        await asyncio.gather(*validation_tasks)
+            check_model_name(agent.model_name)
+            count_and_validate_prompts(
+                agent.system_prompt + agent.description + 
+                agent.agent_name + agent.history
+            )
 
     return task, tasks
 
