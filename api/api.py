@@ -292,7 +292,7 @@ class SwarmSpec(BaseModel):
 
 
 
-async def check_model_name(model_name: str) -> None:
+def check_model_name(model_name: str) -> None:
     if model_name not in model_list:
         raise HTTPException(
             status_code=400,
@@ -473,7 +473,7 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
             detail=f"Failed to retrieve user logs: {str(e)}",
         )
 
-async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]]:
+def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]]:
     """
     Validates the swarm specification and returns the task(s) to be executed.
 
@@ -511,7 +511,7 @@ async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List
     # Validate agents if present
     if swarm_spec.agents:
         for agent in swarm_spec.agents:
-            await check_model_name(agent.model_name)
+            check_model_name(agent.model_name)
             # Safely concatenate strings, handling None values
             prompt_parts = [
                 agent.system_prompt or "",
@@ -520,13 +520,13 @@ async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List
                 agent.history or ""
             ]
             combined_prompt = "".join(prompt_parts)
-            await count_and_validate_prompts(combined_prompt)
+            count_and_validate_prompts(combined_prompt)
 
     return task, tasks
 
 
 
-async def count_and_validate_prompts(prompt: str) -> None:
+def count_and_validate_prompts(prompt: str) -> None:
     if count_tokens(prompt) > 200_000:
         raise HTTPException(
             status_code=400,
@@ -613,7 +613,7 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
     try:
         # Validate the swarm spec
 
-        task, tasks = asyncio.run(validate_swarm_spec(swarm_spec))
+        task, tasks = validate_swarm_spec(swarm_spec)
 
         # Create agents in parallel if specified
         agents = []
@@ -1258,8 +1258,8 @@ async def _run_agent_completion(
             agent_completion.history or ""
         ]
         combined_prompt = "".join(prompt_parts)
-        await count_and_validate_prompts(combined_prompt)
-        await check_model_name(agent_completion.agent_config.model_name)
+        count_and_validate_prompts(combined_prompt)
+        check_model_name(agent_completion.agent_config.model_name)
         
         # Validate agent configuration
         if not agent_completion.agent_config.agent_name:
