@@ -522,7 +522,7 @@ async def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List
 
 
 async def count_and_validate_prompts(prompt: str) -> None:
-    if len(count_tokens(prompt)) > 100_000_000:
+    if count_tokens(prompt) > 200_000:
         raise HTTPException(
             status_code=400,
             detail="Prompt is too long. Please provide a prompt that is less than 10000 tokens. Upgrade to a higher tier to use longer prompts at https://swarms.world/account",
@@ -1791,4 +1791,4 @@ async def get_available_models() -> Dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8080, reload=True, log_level="info", access_log=True)
