@@ -32,7 +32,7 @@ def run_single_agent():
                 "and present findings in a clear, structured format. "
                 "Focus on accuracy, clarity, and actionable recommendations."
             ),
-            "model_name": "gpt-4o",
+            "model_name": "gpt-4o-mini",
             "role": "worker",
             "max_loops": 1,
             "max_tokens": 8192,

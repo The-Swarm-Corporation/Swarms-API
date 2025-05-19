@@ -1324,7 +1324,13 @@ async def _run_agent_completion(
             unique_id = str(uuid4())  # Fallback to UUID if key generation fails
 
         # Calculate tokens once and reuse
-        input_text = agent_completion.task + agent.system_prompt + agent.name + agent_completion.history
+        input_parts = [
+            agent_completion.task or "",
+            agent.system_prompt or "",
+            agent.name or "",
+            agent_completion.history or ""
+        ]
+        input_text = "".join(input_parts)
         input_tokens = count_tokens(input_text)
         output_tokens = count_tokens(any_to_str(result))
 
