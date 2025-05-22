@@ -2,14 +2,11 @@ import os
 import requests
 from dotenv import load_dotenv
 import json
-from swarms.utils.formatter import formatter
 
 load_dotenv()
 
 API_KEY = os.getenv("SWARMS_API_KEY")
-# BASE_URL = "https://swarms-api-285321057562.us-east1.run.app"
-BASE_URL = "http://localhost:8080"
-
+BASE_URL = "https://swarms-api-285321057562.us-east1.run.app"
 
 headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
@@ -23,4 +20,4 @@ def fetch_logs():
 
 if __name__ == "__main__":
     logs = fetch_logs()
-    formatter.print_panel(json.dumps(logs, indent=4))
+    print(json.dumps(logs, indent=4))

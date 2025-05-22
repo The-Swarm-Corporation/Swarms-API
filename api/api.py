@@ -101,42 +101,6 @@ request_counts = defaultdict(lambda: {"count": 0, "start_time": time()})
 scheduled_jobs: Dict[str, Dict] = {}
 
 
-def generate_key(prefix: str = "swarms") -> str:
-    """
-    Generates an API key similar to OpenAI's format (sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX).
-
-    Args:
-        prefix (str): The prefix for the API key. Defaults to "sk".
-
-    Returns:
-        str: An API key string in format: prefix-<48 random characters>
-    """
-    # Create random string of letters and numbers
-    alphabet = string.ascii_letters + string.digits
-    random_part = "".join(secrets.choice(alphabet) for _ in range(28))
-    return f"{prefix}-{random_part}"
-
-
-def rate_limiter(request: Request):
-    client_ip = request.client.host
-    current_time = time()
-    client_data = request_counts[client_ip]
-
-    # Reset count if time window has passed
-    if current_time - client_data["start_time"] > TIME_WINDOW:
-        client_data["count"] = 0
-        client_data["start_time"] = current_time
-
-    # Increment request count
-    client_data["count"] += 1
-
-    # Check if rate limit is exceeded
-    if client_data["count"] > RATE_LIMIT:
-        raise HTTPException(
-            status_code=429, detail="Rate limit exceeded. Please try again later."
-        )
-
-
 class AgentSpec(BaseModel):
     agent_name: Optional[str] = Field(
         # default=None,
@@ -290,6 +254,40 @@ class SwarmSpec(BaseModel):
         arbitrary_types_allowed = True
 
 
+def generate_key(prefix: str = "swarms") -> str:
+    """
+    Generates an API key similar to OpenAI's format (sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX).
+
+    Args:
+        prefix (str): The prefix for the API key. Defaults to "sk".
+
+    Returns:
+        str: An API key string in format: prefix-<48 random characters>
+    """
+    # Create random string of letters and numbers
+    alphabet = string.ascii_letters + string.digits
+    random_part = "".join(secrets.choice(alphabet) for _ in range(28))
+    return f"{prefix}-{random_part}"
+
+
+def rate_limiter(request: Request):
+    client_ip = request.client.host
+    current_time = time()
+    client_data = request_counts[client_ip]
+
+    # Reset count if time window has passed
+    if current_time - client_data["start_time"] > TIME_WINDOW:
+        client_data["count"] = 0
+        client_data["start_time"] = current_time
+
+    # Increment request count
+    client_data["count"] += 1
+
+    # Check if rate limit is exceeded
+    if client_data["count"] > RATE_LIMIT:
+        raise HTTPException(
+            status_code=429, detail="Rate limit exceeded. Please try again later."
+        )
 
 
 def check_model_name(model_name: str) -> None:
@@ -298,6 +296,7 @@ def check_model_name(model_name: str) -> None:
             status_code=400,
             detail=f"Model {model_name} is not available. Check https://litellm.io for available models.",
         )
+
 
 async def capture_telemetry(request: Request) -> Dict[str, Any]:
     """
@@ -455,6 +454,7 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
         supabase_client = get_supabase_client()
 
         api_keys = get_all_api_keys_for_user(user_id)
+
         if not api_keys:
             return []
 
@@ -472,6 +472,7 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve user logs: {str(e)}",
         )
+
 
 def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]]:
     """
@@ -498,7 +499,7 @@ def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]
     # Determine task/tasks
     task = None
     tasks = None
-    
+
     if swarm_spec.task is not None:
         task = swarm_spec.task
     elif swarm_spec.messages is not None:
@@ -524,14 +525,12 @@ def validate_swarm_spec(swarm_spec: SwarmSpec) -> tuple[str, Optional[List[str]]
     return task, tasks
 
 
-
 def count_and_validate_prompts(prompt: str) -> None:
     if count_tokens(prompt) > 200_000:
         raise HTTPException(
             status_code=400,
             detail="Prompt is too long. Please provide a prompt that is less than 10000 tokens. Upgrade to a higher tier to use longer prompts at https://swarms.world/account",
         )
-        
 
 
 def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
@@ -808,7 +807,6 @@ def cleanup_cache():
         entries_to_remove = sorted_entries[: len(context_cache) - MAX_CACHE_SIZE]
         for key, _ in entries_to_remove:
             del context_cache[key]
-
 
 
 async def run_swarm_completion(
@@ -1247,26 +1245,25 @@ async def _run_agent_completion(
     Run an agent with the specified task.
     """
     try:
-        
+
         # Combine all strings first to avoid multiple concatenations
         prompt_parts = [
             agent_completion.agent_config.system_prompt or "",
             agent_completion.task or "",
             agent_completion.agent_config.description or "",
             agent_completion.agent_config.agent_name or "",
-            agent_completion.history or ""
+            agent_completion.history or "",
         ]
         combined_prompt = "".join(prompt_parts)
         count_and_validate_prompts(combined_prompt)
         check_model_name(agent_completion.agent_config.model_name)
-        
+
         # Validate agent configuration
         if not agent_completion.agent_config.agent_name:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
             )
 
-        
         current_time = time()
 
         if agent_completion.history is not None:
@@ -1287,7 +1284,6 @@ async def _run_agent_completion(
             if current_time - cached_data["timestamp"] <= CACHE_TTL:
                 logger.debug("Returning cached agent result")
                 return cached_data["response"]
-
 
         # Create agent from the config
         agent = Agent(
@@ -1636,24 +1632,12 @@ async def run_agent_batch(
     try:
         logger.info(f"Running batch of {len(agent_completions)} agents")
 
-        # Process logging concurrently with the main task
-        async def log_request():
-            try:
-                await log_api_request(x_api_key, agent_completions)
-            except Exception as log_error:
-                logger.warning(f"Failed to log incoming request: {str(log_error)}")
-
-        # Start logging in background
-        log_task = asyncio.create_task(log_request())
+        await log_api_request(x_api_key, agent_completions)
 
         # Process the batch with optimized concurrency
         results = await batched_agent_completion(agent_completions, x_api_key)
 
-        # Wait for logging to complete
-        await log_task
-
-        # Log results in background without waiting
-        asyncio.create_task(log_api_request(x_api_key, results))
+        await log_api_request(x_api_key, results)
 
         logger.info(f"Successfully completed batch of {len(results)} agents")
         return results
@@ -1769,4 +1753,6 @@ async def get_available_models() -> Dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8080, reload=True, log_level="info", access_log=True)
+    uvicorn.run(
+        app, host="0.0.0.0", port=8080, reload=True, log_level="info", access_log=True
+    )
