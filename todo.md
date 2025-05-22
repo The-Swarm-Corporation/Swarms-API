@@ -6,3 +6,5 @@
 - Add auto-prompt generation API 
 - Add various other functionality like AgentRearrange
 - Add circuit breakers and prompt validation, 
+- Add usage parameter to output swarm completion total tokens, and output tokens, input tokens
+- 
