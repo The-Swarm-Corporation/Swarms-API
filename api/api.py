@@ -1635,7 +1635,7 @@ async def run_agent_batch(
         await log_api_request(x_api_key, agent_completions)
 
         # Process the batch with optimized concurrency
-        results = await batched_agent_completion(agent_completions, x_api_key)
+        results = batched_agent_completion(agent_completions, x_api_key)
 
         await log_api_request(x_api_key, results)
 
