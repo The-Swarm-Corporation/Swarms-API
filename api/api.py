@@ -950,7 +950,7 @@ def deduct_credits(api_key: str, amount: float, product_name: str) -> None:
     if (available_credit + free_credit) < deduction:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Insufficient credits. Fill your credit card in the dashboard at https://swarms.world/platform/account",
+            detail="Insufficient credits. Please add more credits to continue using the API. Visit https://swarms.world/platform/account to purchase additional credits and ensure uninterrupted service.",
         )
 
     # 3. Log the transaction
