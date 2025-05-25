@@ -1623,32 +1623,18 @@ async def run_agent_batch(
     Raises:
         HTTPException: If there's an error processing the batch
     """
-    if not agent_completions:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No agent completions provided",
-        )
+    logger.info(f"Running batch of {len(agent_completions)} agents")
 
-    try:
-        logger.info(f"Running batch of {len(agent_completions)} agents")
+    # await log_api_request(x_api_key, agent_completions)
 
-        # await log_api_request(x_api_key, agent_completions)
+    # Process the batch with optimized concurrency
+    results = batched_agent_completion(agent_completions, x_api_key)
 
-        # Process the batch with optimized concurrency
-        results = batched_agent_completion(agent_completions, x_api_key)
+    # await log_api_request(x_api_key, results)
 
-        # await log_api_request(x_api_key, results)
+    logger.info(f"Successfully completed batch of {len(results)} agents")
+    return results
 
-        logger.info(f"Successfully completed batch of {len(results)} agents")
-        return results
-
-    except Exception as e:
-        logger.error(f"Error running agent batch: {str(e)}")
-        logger.exception(e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process agent batch: {str(e)}",
-        )
 
 
 @app.post(
