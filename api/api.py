@@ -1632,12 +1632,12 @@ async def run_agent_batch(
     try:
         logger.info(f"Running batch of {len(agent_completions)} agents")
 
-        await log_api_request(x_api_key, agent_completions)
+        # await log_api_request(x_api_key, agent_completions)
 
         # Process the batch with optimized concurrency
         results = batched_agent_completion(agent_completions, x_api_key)
 
-        await log_api_request(x_api_key, results)
+        # await log_api_request(x_api_key, results)
 
         logger.info(f"Successfully completed batch of {len(results)} agents")
         return results
