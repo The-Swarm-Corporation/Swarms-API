@@ -1673,7 +1673,7 @@ async def get_logs(x_api_key: str = Header(...)) -> Dict[str, Any]:
     excluding any logs that contain a client_ip field in their data.
     """
     try:
-        logs = await get_user_logs(x_api_key)
+        logs = await get_user_logs(api_key=x_api_key)
         return {
             "status": "success",
             "count": len(logs),
