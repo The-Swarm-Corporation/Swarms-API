@@ -471,13 +471,8 @@ async def get_user_logs(
     """
     try:
         supabase_client = get_supabase_client()
-
-        if not api_key:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="API key must be provided",
-            )
-
+        
+        
         # Get logs for the specific API key, excluding telemetry logs
         response = (
             supabase_client.table("swarms_api_logs")
