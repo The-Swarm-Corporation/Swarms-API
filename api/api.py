@@ -459,8 +459,7 @@ async def get_user_logs(
 ) -> List[Dict[str, Any]]:
     """
     Retrieve API request logs for a specific API key.
-    Excludes any logs that have a client_ip field in their data JSON, telemetry logs,
-    and logs containing telemetry data in their content.
+    Excludes logs with client_ip data, telemetry logs, and specific input categories.
 
     Args:
         user_id (str): The user ID (optional)
@@ -471,24 +470,23 @@ async def get_user_logs(
     """
     try:
         supabase_client = get_supabase_client()
-        
-        
-        # Get logs for the specific API key, excluding telemetry logs
+
+        # Get logs for the specific API key, excluding specific categories
         response = (
             supabase_client.table("swarms_api_logs")
             .select("*")
             .eq("api_key", api_key)  # Only get logs for this specific API key
-            .neq("category", "telemetry")  # Exclude telemetry logs
+            .not_.in_("category", ["telemetry", "swarm-input", "agent-input"])  # Exclude specific categories
             .execute()
         )
 
-        # Filter out logs that have client_ip or telemetry data in their content
-        filtered_logs = [
-            log
-            for log in response.data
-            if "client_ip" not in log.get("data", {})
-            and "telemetry" not in log.get("data", {})
-        ]
+        # Filter out logs that have client_ip in their data
+        filtered_logs = []
+        for log in response.data:
+            data = log.get("data", {})
+            # Check if data is a dict and doesn't have client_ip at the top level
+            if isinstance(data, dict) and "client_ip" not in data:
+                filtered_logs.append(log)
 
         return filtered_logs
 
