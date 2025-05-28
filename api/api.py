@@ -799,9 +799,7 @@ async def run_swarm_completion(
         swarm_name = swarm.name
         agents = swarm.agents
 
-        log_api_request(
-            api_key=x_api_key, data=swarm.model_dump(), category="completion"
-        )
+        log_api_request(api_key=x_api_key, data=swarm.model_dump(), category="input")
 
         # Log start of swarm execution
         logger.info(f"Starting swarm {swarm_name} with {len(agents)} agents")
@@ -1231,6 +1229,10 @@ async def _run_agent_completion(
         count_and_validate_prompts(combined_prompt)
         check_model_name(agent_completion.agent_config.model_name)
 
+        log_api_request(
+            api_key=x_api_key, data=agent_completion.model_dump(), category="input"
+        )
+
         # Validate agent configuration
         if not agent_completion.agent_config.agent_name:
             raise HTTPException(
@@ -1254,7 +1256,9 @@ async def _run_agent_completion(
 
         # Run the agent with the provided task
         if agent_completion.history is not None:
-            result = agent.run(task=history_prompt + agent_completion.task)
+            result = agent.run(
+                task=f"History: {history_prompt} \n\n {agent_completion.task}"
+            )
         else:
             result = agent.run(task=agent_completion.task)
 
