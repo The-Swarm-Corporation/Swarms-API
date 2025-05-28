@@ -32,14 +32,14 @@ def run_single_agent():
                 "and present findings in a clear, structured format. "
                 "Focus on accuracy, clarity, and actionable recommendations."
             ),
-            "model_name": "gpt-4o-mini",
+            "model_name": "o3-mini",
             "role": "worker",
             "max_loops": 1,
             "max_tokens": 8192,
             "temperature": 0.5,
             "auto_generate_prompt": False,
         },
-        "task": "Analyze the impact of artificial intelligence on healthcare delivery and provide a comprehensive report with key findings and recommendations.",
+        "task": "What are the best ways to find samples of diabetes from blood samples?",
     }
 
     try:

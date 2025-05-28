@@ -9,3 +9,9 @@
 - add usage costs to the swarm completions
 - Filter out the swarms logs telemetry logs
 - 
+
+
+
+- fix agent outputs, may need to revert to old agent responses
+- fix output type for the swarm router output type
+- 

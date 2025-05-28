@@ -8,7 +8,6 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from decimal import Decimal
-from functools import lru_cache
 from time import time
 from typing import (
     Any,
@@ -365,14 +364,12 @@ async def capture_telemetry(request: Request) -> Dict[str, Any]:
         }
 
 
-@lru_cache(maxsize=1)
 def get_supabase_client():
     supabase_url = os.getenv("SUPABASE_URL")
     supabase_key = os.getenv("SUPABASE_KEY")
     return supabase.create_client(supabase_url, supabase_key)
 
 
-@lru_cache(maxsize=1000)
 def check_api_key(api_key: str) -> bool:
     supabase_client = get_supabase_client()
     response = (
@@ -384,7 +381,6 @@ def check_api_key(api_key: str) -> bool:
     return bool(response.data)
 
 
-@lru_cache(maxsize=1000)
 def get_user_id_from_api_key(api_key: str) -> str:
     """
     Maps an API key to its associated user ID.
@@ -410,7 +406,6 @@ def get_user_id_from_api_key(api_key: str) -> str:
     return response.data[0]["user_id"]
 
 
-@lru_cache(maxsize=1000)
 def verify_api_key(x_api_key: str = Header(...)) -> None:
     """
     Dependency to verify the API key.
@@ -419,7 +414,6 @@ def verify_api_key(x_api_key: str = Header(...)) -> None:
         raise HTTPException(status_code=403, detail="Invalid API Key")
 
 
-@lru_cache(maxsize=1000)
 def get_all_api_keys_for_user(user_id: str) -> List[str]:
     """
     Retrieve all API keys associated with a user ID.
@@ -443,12 +437,13 @@ def get_all_api_keys_for_user(user_id: str) -> List[str]:
 async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
     """
     Retrieve all API request logs for a specific user across all their keys.
+    Only fetches logs with category "completion".
 
     Args:
         user_id (str): The user ID
 
     Returns:
-        List[Dict[str, Any]]: List of log entries for the user
+        List[Dict[str, Any]]: List of log entries for the user with category "completion"
     """
     try:
         supabase_client = get_supabase_client()
@@ -462,6 +457,7 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
             supabase_client.table("swarms_api_logs")
             .select("*")
             .in_("api_key", api_keys)
+            .eq("category", "completion")  # Filter for completion category only
             .execute()
         )
         return response.data
@@ -529,8 +525,26 @@ def count_and_validate_prompts(prompt: str) -> None:
     if count_tokens(prompt) > 200_000:
         raise HTTPException(
             status_code=400,
-            detail="Prompt is too long. Please provide a prompt that is less than 10000 tokens. Upgrade to a higher tier to use longer prompts at https://swarms.world/account",
+            detail="""
+            Prompt is too long. Please provide a prompt that is less than 10000 tokens. 
+            Upgrade to a higher tier to use longer prompts at https://swarms.world/account.
+            If you are using a custom model, please check the token limit of the model.
+            """,
         )
+
+
+def add_up_all_inputs(swarm_spec: SwarmSpec) -> int:
+    # Use sum() with generator expression for better performance
+    return sum(
+        count_tokens(x)
+        for x in (
+            swarm_spec.task,
+            swarm_spec.messages,
+            swarm_spec.tasks,
+            swarm_spec.rules,
+        )
+        if x is not None
+    )
 
 
 def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
@@ -594,6 +608,23 @@ def create_single_agent(agent_spec: Union[AgentSpec, dict]) -> Agent:
         raise HTTPException(status_code=500, detail=f"Failed to create agent: {str(e)}")
 
 
+def add_up_all_agent_inputs(agents: List[Agent]) -> int:
+    """
+    Calculate the total number of tokens across all agent inputs.
+
+    Args:
+        agents (List[Agent]): List of Agent objects to count tokens from
+
+    Returns:
+        int: Total number of tokens across all agent inputs
+
+    Example:
+        >>> agents = [agent1, agent2, agent3]
+        >>> total_tokens = add_up_all_agent_inputs(agents)
+    """
+    return sum(count_tokens(agent.short_memory.get_str()) for agent in agents)
+
+
 def create_swarm(swarm_spec: SwarmSpec, api_key: str):
     """
     Creates and executes a swarm based on the provided specification.
@@ -645,6 +676,11 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
                             status_code=500, detail=f"Failed to create agent: {str(e)}"
                         )
 
+        # Calculate all total input tokens for all the agents, and then save it to the usage schema
+        # total_input_tokens = add_up_all_inputs(swarm_spec) + add_up_all_agent_inputs(
+        #     agents
+        # )
+
         # Create and configure the swarm
         swarm = SwarmRouter(
             name=swarm_spec.name,
@@ -652,7 +688,7 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
             agents=agents,
             max_loops=swarm_spec.max_loops,
             swarm_type=swarm_spec.swarm_type,
-            output_type="dict",
+            output_type="dict-all-except-first",
             return_entire_history=False,
             rules=swarm_spec.rules,
             rearrange_flow=swarm_spec.rearrange_flow,
@@ -703,9 +739,11 @@ def create_swarm(swarm_spec: SwarmSpec, api_key: str):
         )
 
 
-# Add this function after your get_supabase_client() function
-async def log_api_request(
-    api_key: str, data: Union[Dict[str, Any], BaseModel, list]
+# Log API request to Supabase
+def log_api_request(
+    api_key: str,
+    data: Union[Dict[str, Any], BaseModel, list],
+    category: str = "completion",
 ) -> None:
     """
     Log API request data to Supabase swarms_api_logs table.
@@ -713,6 +751,7 @@ async def log_api_request(
     Args:
         api_key: The API key used for the request
         data: Dictionary containing request data to log
+        category: The category of the log entry (e.g. "completion", "telemetry")
     """
     try:
 
@@ -731,6 +770,7 @@ async def log_api_request(
         log_entry = {
             "api_key": api_key,
             "data": data,
+            "category": category,  # Add category to the log entry
         }
 
         # Insert into swarms_api_logs table
@@ -743,72 +783,6 @@ async def log_api_request(
         logger.error(f"Error logging API request: {str(e)}")
 
 
-# Add cache dictionary at module level
-context_cache = {}
-CACHE_TTL = 3600  # 1 hour in seconds
-MAX_CACHE_SIZE = 1000  # Maximum number of cache entries
-CACHE_CLEANUP_INTERVAL = 300  # Clean up cache every 5 minutes
-
-
-def generate_cache_key(swarm: SwarmSpec) -> str:
-    """
-    Generate a unique cache key for a swarm configuration.
-    Includes relevant fields that affect the output.
-    """
-    key_parts = [
-        swarm.name,
-        swarm.task,
-        swarm.swarm_type,
-        str(swarm.max_loops),
-        str(swarm.return_history),
-    ]
-
-    # Add agent configurations to the key
-    if swarm.agents:
-        agent_configs = []
-        for agent in swarm.agents:
-            agent_config = {
-                "name": agent.agent_name,
-                "model": agent.model_name,
-                "prompt": agent.system_prompt,
-                "temp": agent.temperature,
-                "max_loops": agent.max_loops,
-            }
-            agent_configs.append(str(agent_config))
-        key_parts.extend(agent_configs)
-
-    # Add tasks and messages if present
-    if swarm.tasks:
-        key_parts.append(str(swarm.tasks))
-    if swarm.messages:
-        key_parts.append(str(swarm.messages))
-
-    return "|".join(key_parts)
-
-
-def cleanup_cache():
-    """
-    Clean up expired cache entries and enforce size limits.
-    """
-    current_time = time()
-
-    # Remove expired entries
-    expired_keys = [
-        key
-        for key, value in context_cache.items()
-        if current_time - value["timestamp"] >= CACHE_TTL
-    ]
-    for key in expired_keys:
-        del context_cache[key]
-
-    # If still over size limit, remove oldest entries
-    if len(context_cache) > MAX_CACHE_SIZE:
-        sorted_entries = sorted(context_cache.items(), key=lambda x: x[1]["timestamp"])
-        entries_to_remove = sorted_entries[: len(context_cache) - MAX_CACHE_SIZE]
-        for key, _ in entries_to_remove:
-            del context_cache[key]
-
-
 async def run_swarm_completion(
     swarm: SwarmSpec, x_api_key: str = None
 ) -> Dict[str, Any]:
@@ -819,18 +793,9 @@ async def run_swarm_completion(
         swarm_name = swarm.name
         agents = swarm.agents
 
-        # Generate cache key based on swarm configuration
-        cache_key = generate_cache_key(swarm)
-
-        # Check if we have a valid cached result
-        current_time = time()
-        if cache_key in context_cache:
-            cached_result = context_cache[cache_key]
-            if current_time - cached_result["timestamp"] < CACHE_TTL:
-                logger.info(f"Using cached result for swarm {swarm_name}")
-                return cached_result["response"]
-
-        await log_api_request(x_api_key, swarm.model_dump())
+        log_api_request(
+            api_key=x_api_key, data=swarm.model_dump(), category="completion"
+        )
 
         # Log start of swarm execution
         logger.info(f"Starting swarm {swarm_name} with {len(agents)} agents")
@@ -884,6 +849,11 @@ async def run_swarm_completion(
             "output": result,
             "number_of_agents": length_of_agents,
             "service_tier": swarm.service_tier,
+            # "usage": {
+            #     "input_tokens": total_input_tokens,
+            #     "output_tokens": total_output_tokens,
+            #     "total_tokens": total_input_tokens + total_output_tokens,
+            # },
         }
 
         if swarm.tasks is not None:
@@ -892,14 +862,7 @@ async def run_swarm_completion(
         if swarm.messages is not None:
             response["messages"] = swarm.messages
 
-        # Cache the response
-        context_cache[cache_key] = {"response": response, "timestamp": current_time}
-
-        # Clean up cache periodically
-        if current_time % CACHE_CLEANUP_INTERVAL < 1:  # Check every ~5 minutes
-            cleanup_cache()
-
-        await log_api_request(x_api_key, response)
+        log_api_request(api_key=x_api_key, data=response, category="completion")
 
         return response
 
@@ -1264,8 +1227,6 @@ async def _run_agent_completion(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Agent name is required"
             )
 
-        current_time = time()
-
         if agent_completion.history is not None:
             # Format the dictionary with keys and values on separate lines
             history_str = "\n".join(
@@ -1274,16 +1235,6 @@ async def _run_agent_completion(
             history_prompt = f"History: {history_str}\n\n"
         else:
             history_prompt = ""
-
-        # Check cache first
-        cache_key = (
-            f"{agent_completion.agent_config.model_dump_json()}_{agent_completion.task}"
-        )
-        if cache_key in agent_cache:
-            cached_data = agent_cache[cache_key]
-            if current_time - cached_data["timestamp"] <= CACHE_TTL:
-                logger.debug("Returning cached agent result")
-                return cached_data["response"]
 
         # Create agent from the config
         agent = Agent(
@@ -1317,14 +1268,7 @@ async def _run_agent_completion(
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
-        # Cache the result
-        agent_cache[cache_key] = {"response": output, "timestamp": current_time}
-
-        # Clean up cache periodically
-        if current_time % CACHE_CLEANUP_INTERVAL < 1:
-            cleanup_agent_cache()
-
-        log_api_request(api_key=x_api_key, data=output)
+        log_api_request(api_key=x_api_key, data=output, category="completion")
 
         return output
     except HTTPException:
@@ -1470,7 +1414,7 @@ async def telemetry_middleware(request: Request, call_next):
         # Log telemetry to database if we have an API key
         if api_key:
             try:
-                await log_api_request(
+                log_api_request(
                     api_key,
                     {
                         "telemetry": telemetry,
@@ -1478,6 +1422,7 @@ async def telemetry_middleware(request: Request, call_next):
                         "method": request.method,
                         "timestamp": datetime.now(UTC).isoformat(),
                     },
+                    category="telemetry",
                 )
             except Exception as e:
                 logger.error(f"Failed to log telemetry to database: {str(e)}")
@@ -1500,7 +1445,7 @@ async def telemetry_middleware(request: Request, call_next):
         api_key = request.headers.get("x-api-key")
         if api_key:
             try:
-                await log_api_request(
+                log_api_request(
                     api_key,
                     {
                         "telemetry": telemetry,
@@ -1509,6 +1454,7 @@ async def telemetry_middleware(request: Request, call_next):
                         "timestamp": datetime.now(UTC).isoformat(),
                         "error": True,
                     },
+                    category="telemetry",
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log error telemetry: {str(log_error)}")
@@ -1560,22 +1506,6 @@ async def run_swarm(swarm: SwarmSpec, x_api_key=Header(...)) -> Dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
-
-
-# Cache for agent configurations and results
-agent_cache = {}
-CACHE_TTL = 300  # 5 minutes
-CACHE_CLEANUP_INTERVAL = 60  # 1 minute
-
-
-def cleanup_agent_cache():
-    """Clean up expired cache entries"""
-    current_time = time()
-    expired_keys = [
-        k for k, v in agent_cache.items() if current_time - v["timestamp"] > CACHE_TTL
-    ]
-    for k in expired_keys:
-        del agent_cache[k]
 
 
 @app.post(
@@ -1634,7 +1564,6 @@ async def run_agent_batch(
 
     logger.info(f"Successfully completed batch of {len(results)} agents")
     return results
-
 
 
 @app.post(
