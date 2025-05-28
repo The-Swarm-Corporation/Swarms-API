@@ -436,14 +436,14 @@ def get_all_api_keys_for_user(user_id: str) -> List[str]:
 
 async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
     """
-    Retrieve all API request logs for a specific user across all their keys.
-    Only fetches logs with category "completion".
+    Retrieve all API request logs for a specific user across all their keys,
+    excluding any logs that have a client_ip field in their data JSON.
 
     Args:
         user_id (str): The user ID
 
     Returns:
-        List[Dict[str, Any]]: List of log entries for the user with category "completion"
+        List[Dict[str, Any]]: List of log entries for the user that don't contain a client_ip field
     """
     try:
         supabase_client = get_supabase_client()
@@ -453,14 +453,21 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
         if not api_keys:
             return []
 
+        # Get all logs for the user's API keys
         response = (
             supabase_client.table("swarms_api_logs")
             .select("*")
             .in_("api_key", api_keys)
-            .eq("category", "completion")  # Filter for completion category only
             .execute()
         )
-        return response.data
+
+        # Filter out logs that have client_ip in their data
+        filtered_logs = [
+            log for log in response.data 
+            if "client_ip" not in log.get("data", {})
+        ]
+        
+        return filtered_logs
 
     except Exception as e:
         logger.error(f"Error retrieving logs for user {user_id}: {str(e)}")
@@ -1627,7 +1634,8 @@ def run_batch_completions(
 )
 async def get_logs(x_api_key: str = Header(...)) -> Dict[str, Any]:
     """
-    Get all API request logs for the user associated with the provided API key.
+    Get all API request logs for the user associated with the provided API key,
+    excluding any logs that contain a client_ip field in their data.
     """
     try:
         user_id = get_user_id_from_api_key(x_api_key)
