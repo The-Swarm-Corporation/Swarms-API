@@ -799,7 +799,9 @@ async def run_swarm_completion(
         swarm_name = swarm.name
         agents = swarm.agents
 
-        log_api_request(api_key=x_api_key, data=swarm.model_dump(), category="input")
+        log_api_request(
+            api_key=x_api_key, data=swarm.model_dump(), category="swarm-input"
+        )
 
         # Log start of swarm execution
         logger.info(f"Starting swarm {swarm_name} with {len(agents)} agents")
@@ -1230,7 +1232,9 @@ async def _run_agent_completion(
         check_model_name(agent_completion.agent_config.model_name)
 
         log_api_request(
-            api_key=x_api_key, data=agent_completion.model_dump(), category="input"
+            api_key=x_api_key,
+            data=agent_completion.model_dump(),
+            category="agent-input",
         )
 
         # Validate agent configuration

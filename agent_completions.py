@@ -36,7 +36,7 @@ def run_single_agent():
             "role": "worker",
             "max_loops": 1,
             "max_tokens": 8192,
-            "temperature": 0.5,
+            "temperature": 1,
             "auto_generate_prompt": False,
         },
         "task": "What are the best ways to find samples of diabetes from blood samples?",
