@@ -393,17 +393,37 @@ def get_user_id_from_api_key(api_key: str) -> str:
 
     Raises:
         ValueError: If the API key is invalid or not found
+        HTTPException: If there's an error connecting to the database
     """
-    supabase_client = get_supabase_client()
-    response = (
-        supabase_client.table("swarms_cloud_api_keys")
-        .select("user_id")
-        .eq("key", api_key)
-        .execute()
-    )
-    if not response.data:
-        raise ValueError("Invalid API key")
-    return response.data[0]["user_id"]
+    if not api_key or not isinstance(api_key, str):
+        raise ValueError("Invalid API key format")
+
+    try:
+        supabase_client = get_supabase_client()
+        response = (
+            supabase_client.table("swarms_cloud_api_keys")
+            .select("user_id")
+            .eq("key", api_key)
+            .execute()
+        )
+
+        if not response.data:
+            raise ValueError("Invalid API key")
+
+        user_id = response.data[0].get("user_id")
+        if not user_id:
+            raise ValueError("User ID not found for API key")
+
+        return user_id
+
+    except Exception:
+        logger.error(
+            "User ID not found in registry. Ensure your API key is valid and you have an account."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User ID not found in registry. Ensure your API key is valid and you have an account.",
+        )
 
 
 def verify_api_key(x_api_key: str = Header(...)) -> None:
@@ -434,49 +454,54 @@ def get_all_api_keys_for_user(user_id: str) -> List[str]:
     return [entry["key"] for entry in response.data]
 
 
-async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
+async def get_user_logs(
+    user_id: Optional[str] = None, api_key: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
-    Retrieve all API request logs for a specific user across all their keys,
-    excluding any logs that have a client_ip field in their data JSON, telemetry logs,
+    Retrieve API request logs for a specific API key.
+    Excludes any logs that have a client_ip field in their data JSON, telemetry logs,
     and logs containing telemetry data in their content.
 
     Args:
-        user_id (str): The user ID
+        user_id (str): The user ID (optional)
+        api_key (str): The API key to fetch logs for
 
     Returns:
-        List[Dict[str, Any]]: List of log entries for the user that don't contain telemetry data
+        List[Dict[str, Any]]: List of log entries that don't contain telemetry data
     """
     try:
         supabase_client = get_supabase_client()
 
-        api_keys = get_all_api_keys_for_user(user_id)
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="API key must be provided",
+            )
 
-        if not api_keys:
-            return []
-
-        # Get all logs for the user's API keys, excluding telemetry logs
+        # Get logs for the specific API key, excluding telemetry logs
         response = (
             supabase_client.table("swarms_api_logs")
             .select("*")
-            .in_("api_key", api_keys)
+            .eq("api_key", api_key)  # Only get logs for this specific API key
             .neq("category", "telemetry")  # Exclude telemetry logs
             .execute()
         )
 
         # Filter out logs that have client_ip or telemetry data in their content
         filtered_logs = [
-            log for log in response.data 
-            if "client_ip" not in log.get("data", {}) 
+            log
+            for log in response.data
+            if "client_ip" not in log.get("data", {})
             and "telemetry" not in log.get("data", {})
         ]
 
         return filtered_logs
 
     except Exception as e:
-        logger.error(f"Error retrieving logs for user {user_id}: {str(e)}")
+        logger.error(f"Error retrieving logs for API key: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve user logs: {str(e)}",
+            detail=f"Failed to retrieve logs: {str(e)}",
         )
 
 
@@ -1653,8 +1678,7 @@ async def get_logs(x_api_key: str = Header(...)) -> Dict[str, Any]:
     excluding any logs that contain a client_ip field in their data.
     """
     try:
-        user_id = get_user_id_from_api_key(x_api_key)
-        logs = await get_user_logs(user_id)
+        logs = await get_user_logs(x_api_key)
         return {
             "status": "success",
             "count": len(logs),
