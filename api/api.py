@@ -463,10 +463,9 @@ async def get_user_logs(user_id: str) -> List[Dict[str, Any]]:
 
         # Filter out logs that have client_ip in their data
         filtered_logs = [
-            log for log in response.data 
-            if "client_ip" not in log.get("data", {})
+            log for log in response.data if "client_ip" not in log.get("data", {})
         ]
-        
+
         return filtered_logs
 
     except Exception as e:
@@ -813,9 +812,12 @@ async def run_swarm_completion(
         # Handle flex processing
         max_retries = 3 if swarm.service_tier == "flex" else 1
 
+        start_time = time()
+
         for attempt in range(max_retries):
             try:
                 result = create_swarm(swarm, x_api_key)
+                execution_time = time() - start_time
                 break
             except HTTPException as e:
                 if e.status_code == 429 and swarm.service_tier == "flex":
@@ -856,6 +858,7 @@ async def run_swarm_completion(
             "output": result,
             "number_of_agents": length_of_agents,
             "service_tier": swarm.service_tier,
+            "execution_time": execution_time,
             # "usage": {
             #     "input_tokens": total_input_tokens,
             #     "output_tokens": total_output_tokens,
